@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment Variables
+.env
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Cache
+.cache/
+
+# SQLite
+*.sqlite3
+*.db
+
+# Workspace Data
+workspace/cache/
+workspace/logs/
+
+# Render
+.render/
+
+# Python Testing
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
