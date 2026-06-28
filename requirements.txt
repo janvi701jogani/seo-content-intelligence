@@ -1,1 +1,11 @@
+streamlit
 spacy
+gliner
+keybert
+yake
+rapidfuzz
+sentence-transformers
+beautifulsoup4
+lxml
+pandas
+numpy
