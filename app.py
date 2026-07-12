@@ -143,10 +143,18 @@ if st.button("Run Competitor Intelligence"):
 
         entities = results["entities"]
 
+        topics = results["topics"]
+
+        coverage = results["coverage"]
+        statistics = results["statistics"]
+
     tabs = st.tabs([
         "SERP",
         "Competitors",
-        "Entities"
+        "Entities",
+        "Topics",
+        "Coverage",
+        "Statistics"
     ])
 
     # -----------------------------
@@ -219,3 +227,49 @@ if st.button("Run Competitor Intelligence"):
         else:
 
             st.info("No entities found.")
+
+    # -----------------------------
+    # Topics
+    # -----------------------------
+
+    with tabs[3]:
+        st.subheader("Topic Intelligence")
+        topics = results.get("topics", [])
+        if topics:
+            st.dataframe(
+                topics,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No topics found.")
+
+    # -----------------------------
+    # Coverage
+    # -----------------------------
+
+    with tabs[4]:
+        st.subheader("Coverage")
+        if coverage:
+            st.dataframe(
+                coverage,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No coverage data found.")
+
+    # -----------------------------
+    # Statistics
+    # -----------------------------
+
+    with tabs[5]:
+        st.subheader("Statistics")
+        if statistics:
+            st.dataframe(
+                statistics,
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No statistics found.")

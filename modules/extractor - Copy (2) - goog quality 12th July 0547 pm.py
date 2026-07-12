@@ -6,9 +6,7 @@ Single-file extractor for competitor content intelligence:
 - generic entity extraction with spaCy, GLiNER, KeyBERT, YAKE
 - generic normalization and RapidFuzz merging
 - Section Intelligence: section-based (not sentence- or heading-based)
-  editorial section clustering across competitors, with oversized sections
-  split into paragraph-group sub-sections before embedding so a single long
-  section can yield more than one topic
+  editorial section clustering across competitors
 - Structure Intelligence: heading/table/list/FAQ structural comparison
 - coverage, gaps, co-occurrence, and aggregate statistics
 
@@ -64,23 +62,6 @@ MIN_SECTION_SENTENCE_WORDS = 6
 # label is a section name ("Understanding Mutual Fund Fees"), never a
 # sentence or disclaimer. Enforced by cap_label().
 MAX_LABEL_WORDS = 8
-
-# Sub-section splitting. Many real-world sections are 600-1200+ words
-# covering several distinct sub-topics under one heading (e.g. a "Choosing
-# a Mutual Fund" H2 that actually covers investment goals, risk tolerance,
-# fees, and share classes one after another). Embedding the whole section
-# as a single centroid vector collapses all of that into one point, so
-# clustering can only ever produce one topic for it no matter how the
-# distance threshold is tuned. Splitting oversized sections into smaller
-# paragraph-group sub-sections before embedding gives clustering
-# finer-grained input to work with, which is what actually increases topic
-# count and comprehension -- clustering still decides the final topic
-# count, this only gives it more (and better) material to cluster.
-# Paragraphs are never split internally; a sub-section is always a
-# contiguous run of whole paragraphs.
-MAX_SECTION_WORDS_BEFORE_SPLIT = 250
-SUBSECTION_TARGET_WORDS = 200
-MIN_SUBSECTION_WORDS = 70
 
 # Generic forum/meta-discourse patterns. These are structural (apply to any
 # forum content regardless of niche), not domain vocabulary, so they don't
@@ -1132,12 +1113,10 @@ def attach_related_entities(
 # ---------------------------------------------------------------------------
 # Section Intelligence engine.
 #
-# Article -> sections (heading + its paragraphs) -> oversized sections split
-# into paragraph-group sub-sections (see split_section_into_subsections()) ->
-# extractive summary per (sub-)section -> embed summaries -> cluster
-# summaries globally (complete linkage, see make_agglomerative()) -> section
-# labels (ranked candidate pipeline, see generate_label_from_content() and
-# choose_group_label()).
+# Article -> sections (heading + its paragraphs) -> extractive summary per
+# section -> embed summaries -> cluster summaries globally (complete linkage,
+# see make_agglomerative()) -> section labels (ranked candidate pipeline,
+# see generate_label_from_content() and choose_group_label()).
 #
 # Headings are candidates, not sections: a heading is only used verbatim as a
 # label if it clears a quality bar and isn't forum/meta boilerplate.
@@ -1286,84 +1265,6 @@ def split_into_sections(
 
     flush()
     return sections
-
-
-def split_section_into_subsections(section: Section) -> List[Section]:
-    """
-    Splits an oversized section into smaller paragraph-group sub-sections so
-    each sub-topic can be embedded and clustered independently, instead of
-    being averaged away inside one whole-section centroid. Paragraphs are
-    never split internally -- a sub-section is always a contiguous run of
-    whole paragraphs, greedily grouped up to roughly SUBSECTION_TARGET_WORDS.
-
-    Only the first sub-section keeps the original heading, so heading-based
-    labeling still applies to it. Later sub-sections get an empty heading:
-    score_heading_quality("") returns 0, so build_section_profiles()
-    correctly falls back to content-derived labeling for them -- no heading
-    text is invented for a sub-section that never had one of its own.
-
-    Tables/lists/images/links are attached only to the first sub-section.
-    split_into_sections() does not record which paragraph a table or list
-    originally sat next to, so there's no reliable way to attribute them to
-    one specific sub-section, and duplicating them across every sub-section
-    would inflate average_table_count/average_list_count downstream.
-    """
-    if (
-        section.word_count <= MAX_SECTION_WORDS_BEFORE_SPLIT
-        or len(section.paragraphs) <= 1
-    ):
-        return [section]
-
-    chunks: List[List[str]] = []
-    current_chunk: List[str] = []
-    current_words = 0
-    for paragraph in section.paragraphs:
-        paragraph_words = len(paragraph.split())
-        if current_chunk and current_words + paragraph_words > SUBSECTION_TARGET_WORDS:
-            chunks.append(current_chunk)
-            current_chunk = []
-            current_words = 0
-        current_chunk.append(paragraph)
-        current_words += paragraph_words
-    if current_chunk:
-        chunks.append(current_chunk)
-
-    # A too-small trailing chunk becomes an under-powered orphan rather than
-    # a real sub-topic -- merge it back into the previous chunk instead.
-    if len(chunks) > 1 and sum(len(p.split()) for p in chunks[-1]) < MIN_SUBSECTION_WORDS:
-        chunks[-2].extend(chunks.pop())
-
-    if len(chunks) <= 1:
-        return [section]
-
-    subsections: List[Section] = []
-    for chunk_index, chunk_paragraphs in enumerate(chunks):
-        is_first = chunk_index == 0
-        subsections.append(
-            Section(
-                heading=section.heading if is_first else "",
-                heading_level=section.heading_level,
-                paragraphs=chunk_paragraphs,
-                order_index=section.order_index * 1000 + chunk_index,
-                competitor_index=section.competitor_index,
-                url=section.url,
-                tables=list(section.tables) if is_first else [],
-                lists=list(section.lists) if is_first else [],
-                images=list(section.images) if is_first else [],
-                internal_links=list(section.internal_links) if is_first else [],
-                external_links=list(section.external_links) if is_first else [],
-                is_faq=section.is_faq,
-            )
-        )
-    return subsections
-
-
-def expand_large_sections(sections: List[Section]) -> List[Section]:
-    """Applies split_section_into_subsections() across a document's sections."""
-    expanded: List[Section] = []
-    for section in sections:
-        expanded.extend(split_section_into_subsections(section))
-    return expanded
 
 
 def split_section_sentences(
@@ -1785,8 +1686,7 @@ def generate_section_topic_intelligence(
     / cluster_sentence_topics in earlier, now-removed engine generations):
 
     For each competitor:
-        split_into_sections() -> expand_large_sections() (oversized sections
-        become paragraph-group sub-sections) -> build_section_profiles()
+        split_into_sections() -> build_section_profiles()
         -> competitor["topics"]
     Then, across the whole corpus at once:
         cluster_section_profiles() -> build_section_topic_aggregates()
@@ -1801,7 +1701,6 @@ def generate_section_topic_intelligence(
             competitor,
             index,
         )
-        sections = expand_large_sections(sections)
         profiles = build_section_profiles(sections)
         all_profiles.extend(profiles)
         competitor_profiles[index].extend(profiles)

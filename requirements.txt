@@ -8,4 +8,8 @@ sentence-transformers
 beautifulsoup4
 lxml
 pandas
+<<<<<<< HEAD
 numpy
+=======
+numpy
+>>>>>>> 76bf98f (Add section intelligence engine)
