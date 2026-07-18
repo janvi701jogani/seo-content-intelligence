@@ -2,10 +2,6 @@ from modules.community.reddit import (
     RedditCollector,
     run_community_intelligence,
 )
-from modules.research.literature import (
-    ResearchCollector,
-    run_research_intelligence,
-)
 from modules.extractor import run_intelligence_engine
 import pandas as pd
 import streamlit as st
@@ -202,27 +198,12 @@ if st.button("Run Competitor Intelligence"):
                 competitor_topics=topics,
             )
 
-    research = {}
-
-    with st.spinner("Scanning research literature..."):
-        research_papers = ResearchCollector().search(
-            keyword=keyword,
-            limit=25,
-        )
-        if research_papers:
-            research = run_research_intelligence(
-                research_papers,
-                competitor_entities=entities,
-                competitor_topics=topics,
-            )
-
     tabs = st.tabs([
         "SERP",
         "Competitors",
         "Topics",
         "Entities",
-        "Community",
-        "Research"
+        "Community"
     ])
 
     # -----------------------------
@@ -428,56 +409,3 @@ if st.button("Run Competitor Intelligence"):
                     st.subheader("Top Comments")
                     for comment in thread.comments[:10]:
                         st.write(comment.body)
-
-    # -----------------------------
-    # Research
-    # -----------------------------
-
-    with tabs[5]:
-
-        st.subheader("Research Insights")
-
-        if not research:
-            st.info("No research literature found.")
-        else:
-            # Overview
-            rstats = research.get("statistics", {})
-            r1, r2, r3, r4, r5 = st.columns(5)
-            r1.metric("Papers scanned", rstats.get("papers", 0))
-            r2.metric("Reviews", rstats.get("reviews", 0))
-            r3.metric("Journals", rstats.get("journals", 0))
-            r4.metric("Avg. citations", rstats.get("average_citations", 0))
-            r5.metric("Year span", rstats.get("year_span", "-"))
-
-            st.divider()
-            st.subheader("Information Gain")
-            st.caption(
-                "Research concepts ranked by lowest competitor coverage "
-                "and highest research support. These are the unique, "
-                "citable angles competitors miss."
-            )
-            render_table(
-                research.get("information_gain", []),
-                "No information-gain concepts computed."
-            )
-
-            st.divider()
-            st.subheader("Data Points to Cite")
-            render_table(
-                research.get("data_points", []),
-                "No numeric findings extracted."
-            )
-
-            st.divider()
-            st.subheader("Research Concepts")
-            render_table(
-                research.get("concepts", []),
-                "No research concepts found."
-            )
-
-            st.divider()
-            st.subheader("Papers (recent and reviews first)")
-            render_table(
-                research.get("papers", []),
-                "No papers found."
-            )
