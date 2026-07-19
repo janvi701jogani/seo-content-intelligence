@@ -6,6 +6,9 @@ from modules.research.literature import (
     ResearchCollector,
     run_research_intelligence,
 )
+from modules.search.intelligence import run_search_intelligence
+from modules.strategy.funnel import run_funnel_strategy
+from modules.brief.content_brief import run_content_brief
 from modules.extractor import run_intelligence_engine
 import pandas as pd
 import streamlit as st
@@ -216,13 +219,61 @@ if st.button("Run Competitor Intelligence"):
                 competitor_topics=topics,
             )
 
+    with st.spinner("Analyzing search intent..."):
+        search_intel = run_search_intelligence(
+            keyword=keyword,
+            serper_key=serper_key,
+            country=country,
+            language=language,
+            competitors=competitors,
+            community=community,
+        )
+
+    strategy = {}
+
+    if client is not None:
+        with st.spinner("Generating funnel content strategy..."):
+            strategy = run_funnel_strategy(
+                client,
+                keyword,
+                topics=topics,
+                entities=entities,
+                community=community,
+                search_intel=search_intel,
+                competitors=competitors,
+            )
+
+    brief = {}
+
+    if client is not None:
+        with st.spinner("Researching all tabs and drafting content brief..."):
+            brief = run_content_brief(
+                client,
+                keyword,
+                bundle={
+                    "keyword": keyword,
+                    "topics": topics,
+                    "entities": entities,
+                    "search_intel": search_intel,
+                    "community": community,
+                    "reddit_threads": reddit_threads,
+                    "research": research,
+                    "research_papers": research_papers,
+                    "competitors": competitors,
+                    "strategy": strategy,
+                },
+            )
+
     tabs = st.tabs([
         "SERP",
+        "Search",
         "Competitors",
         "Topics",
         "Entities",
         "Community",
-        "Research"
+        "Research",
+        "Recommendations",
+        "Content Brief"
     ])
 
     # -----------------------------
@@ -244,10 +295,55 @@ if st.button("Run Competitor Intelligence"):
             st.divider()
 
     # -----------------------------
-    # Competitors
+    # Search Intelligence
     # -----------------------------
 
     with tabs[1]:
+
+        st.subheader("Search Intelligence")
+
+        st.write("### Signal Matrix")
+        st.caption(
+            "Questions ranked by opportunity: strong Google presence + "
+            "Reddit demand + low competitor coverage rise to the top."
+        )
+        render_table(
+            search_intel.get("signal_matrix", []),
+            "No signal matrix computed."
+        )
+
+        st.divider()
+        st.write("### Question Intelligence")
+        st.caption("Merged and clustered across all sources below.")
+        render_table(
+            search_intel.get("question_intelligence", []),
+            "No questions found."
+        )
+
+        st.divider()
+        st.write("### People Also Ask")
+        render_table(search_intel.get("paa", []), "No PAA results.")
+
+        st.divider()
+        st.write("### Related Searches")
+        render_table(
+            search_intel.get("related_searches", []),
+            "No related searches."
+        )
+
+        st.divider()
+        st.write("### Autosuggest")
+        render_table(search_intel.get("autosuggest", []), "No autosuggest results.")
+
+        st.divider()
+        st.write("### Competitor FAQs")
+        render_table(search_intel.get("faqs", []), "No FAQs extracted.")
+
+    # -----------------------------
+    # Competitors
+    # -----------------------------
+
+    with tabs[2]:
 
         st.subheader("Competitor Intelligence")
 
@@ -280,7 +376,7 @@ if st.button("Run Competitor Intelligence"):
     # Topics
     # -----------------------------
 
-    with tabs[2]:
+    with tabs[3]:
 
         st.subheader("Topic Intelligence")
 
@@ -311,7 +407,7 @@ if st.button("Run Competitor Intelligence"):
     # Entities
     # -----------------------------
 
-    with tabs[3]:
+    with tabs[4]:
 
         st.subheader("Entity Intelligence")
 
@@ -341,7 +437,7 @@ if st.button("Run Competitor Intelligence"):
     # Community
     # -----------------------------
 
-    with tabs[4]:
+    with tabs[5]:
 
         st.subheader("Community Intelligence")
 
@@ -433,7 +529,7 @@ if st.button("Run Competitor Intelligence"):
     # Research
     # -----------------------------
 
-    with tabs[5]:
+    with tabs[6]:
 
         st.subheader("Research Insights")
 
@@ -481,3 +577,73 @@ if st.button("Run Competitor Intelligence"):
                 research.get("papers", []),
                 "No papers found."
             )
+
+    # -----------------------------
+    # Recommendations (funnel strategy)
+    # -----------------------------
+
+    with tabs[7]:
+
+        st.subheader("Content Recommendations")
+
+        if client is None:
+            st.info("Enter an OpenAI API key in the sidebar to generate "
+                    "funnel content recommendations.")
+        elif not strategy:
+            st.info("No recommendations generated.")
+        else:
+            stage = strategy.get("stage", "")
+            rationale = strategy.get("stage_rationale", "")
+            st.write(f"**Detected funnel stage:** {stage}")
+            if rationale:
+                st.caption(rationale)
+            st.caption(
+                "Educational, brand-neutral angles for the stages below "
+                "this keyword in the funnel."
+            )
+
+            recommendations = strategy.get("recommendations", {}) or {}
+
+            for stage_key in ("MOFU", "BOFU"):
+                items = recommendations.get(stage_key, [])
+                if items:
+                    st.divider()
+                    st.subheader(f"{stage_key} Content Ideas")
+                    render_table(items, f"No {stage_key} recommendations.")
+
+            faqs = recommendations.get("FAQs", [])
+            if faqs:
+                st.divider()
+                st.subheader("FAQs")
+                render_table(faqs, "No FAQ recommendations.")
+
+    # -----------------------------
+    # Content Brief (research agent)
+    # -----------------------------
+
+    with tabs[8]:
+
+        st.subheader("Content Brief")
+
+        if client is None:
+            st.info("Enter an OpenAI API key in the sidebar to generate a "
+                    "content brief.")
+        elif not brief or not brief.get("brief"):
+            st.info("No content brief generated.")
+        else:
+            st.download_button(
+                "Download brief (Markdown)",
+                brief["brief"],
+                file_name=f"{project_name}-content-brief.md",
+                mime="text/markdown",
+            )
+            st.markdown(brief["brief"])
+
+            with st.expander("All sources"):
+                sources = brief.get("sources", {})
+                st.write("**Competitors**")
+                render_table(sources.get("competitors", []), "None.")
+                st.write("**Reddit threads**")
+                render_table(sources.get("reddit_threads", []), "None.")
+                st.write("**Papers**")
+                render_table(sources.get("papers", []), "None.")

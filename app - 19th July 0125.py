@@ -2,6 +2,11 @@ from modules.community.reddit import (
     RedditCollector,
     run_community_intelligence,
 )
+from modules.research.literature import (
+    ResearchCollector,
+    run_research_intelligence,
+)
+from modules.search.intelligence import run_search_intelligence
 from modules.extractor import run_intelligence_engine
 import pandas as pd
 import streamlit as st
@@ -198,12 +203,38 @@ if st.button("Run Competitor Intelligence"):
                 competitor_topics=topics,
             )
 
+    research = {}
+
+    with st.spinner("Scanning research literature..."):
+        research_papers = ResearchCollector().search(
+            keyword=keyword,
+            limit=25,
+        )
+        if research_papers:
+            research = run_research_intelligence(
+                research_papers,
+                competitor_entities=entities,
+                competitor_topics=topics,
+            )
+
+    with st.spinner("Analyzing search intent..."):
+        search_intel = run_search_intelligence(
+            keyword=keyword,
+            serper_key=serper_key,
+            country=country,
+            language=language,
+            competitors=competitors,
+            community=community,
+        )
+
     tabs = st.tabs([
         "SERP",
+        "Search",
         "Competitors",
         "Topics",
         "Entities",
-        "Community"
+        "Community",
+        "Research"
     ])
 
     # -----------------------------
@@ -225,10 +256,55 @@ if st.button("Run Competitor Intelligence"):
             st.divider()
 
     # -----------------------------
-    # Competitors
+    # Search Intelligence
     # -----------------------------
 
     with tabs[1]:
+
+        st.subheader("Search Intelligence")
+
+        st.write("### Signal Matrix")
+        st.caption(
+            "Questions ranked by opportunity: strong Google presence + "
+            "Reddit demand + low competitor coverage rise to the top."
+        )
+        render_table(
+            search_intel.get("signal_matrix", []),
+            "No signal matrix computed."
+        )
+
+        st.divider()
+        st.write("### Question Intelligence")
+        st.caption("Merged and clustered across all sources below.")
+        render_table(
+            search_intel.get("question_intelligence", []),
+            "No questions found."
+        )
+
+        st.divider()
+        st.write("### People Also Ask")
+        render_table(search_intel.get("paa", []), "No PAA results.")
+
+        st.divider()
+        st.write("### Related Searches")
+        render_table(
+            search_intel.get("related_searches", []),
+            "No related searches."
+        )
+
+        st.divider()
+        st.write("### Autosuggest")
+        render_table(search_intel.get("autosuggest", []), "No autosuggest results.")
+
+        st.divider()
+        st.write("### Competitor FAQs")
+        render_table(search_intel.get("faqs", []), "No FAQs extracted.")
+
+    # -----------------------------
+    # Competitors
+    # -----------------------------
+
+    with tabs[2]:
 
         st.subheader("Competitor Intelligence")
 
@@ -261,7 +337,7 @@ if st.button("Run Competitor Intelligence"):
     # Topics
     # -----------------------------
 
-    with tabs[2]:
+    with tabs[3]:
 
         st.subheader("Topic Intelligence")
 
@@ -292,7 +368,7 @@ if st.button("Run Competitor Intelligence"):
     # Entities
     # -----------------------------
 
-    with tabs[3]:
+    with tabs[4]:
 
         st.subheader("Entity Intelligence")
 
@@ -322,7 +398,7 @@ if st.button("Run Competitor Intelligence"):
     # Community
     # -----------------------------
 
-    with tabs[4]:
+    with tabs[5]:
 
         st.subheader("Community Intelligence")
 
@@ -409,3 +485,56 @@ if st.button("Run Competitor Intelligence"):
                     st.subheader("Top Comments")
                     for comment in thread.comments[:10]:
                         st.write(comment.body)
+
+    # -----------------------------
+    # Research
+    # -----------------------------
+
+    with tabs[6]:
+
+        st.subheader("Research Insights")
+
+        if not research:
+            st.info("No research literature found.")
+        else:
+            # Overview
+            rstats = research.get("statistics", {})
+            r1, r2, r3, r4, r5 = st.columns(5)
+            r1.metric("Papers scanned", rstats.get("papers", 0))
+            r2.metric("Reviews", rstats.get("reviews", 0))
+            r3.metric("Journals", rstats.get("journals", 0))
+            r4.metric("Avg. citations", rstats.get("average_citations", 0))
+            r5.metric("Year span", rstats.get("year_span", "-"))
+
+            st.divider()
+            st.subheader("Information Gain")
+            st.caption(
+                "Research concepts ranked by lowest competitor coverage "
+                "and highest research support. These are the unique, "
+                "citable angles competitors miss."
+            )
+            render_table(
+                research.get("information_gain", []),
+                "No information-gain concepts computed."
+            )
+
+            st.divider()
+            st.subheader("Data Points to Cite")
+            render_table(
+                research.get("data_points", []),
+                "No numeric findings extracted."
+            )
+
+            st.divider()
+            st.subheader("Research Concepts")
+            render_table(
+                research.get("concepts", []),
+                "No research concepts found."
+            )
+
+            st.divider()
+            st.subheader("Papers (recent and reviews first)")
+            render_table(
+                research.get("papers", []),
+                "No papers found."
+            )

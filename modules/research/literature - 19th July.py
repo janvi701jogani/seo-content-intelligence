@@ -28,13 +28,11 @@ from collections import Counter
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Sequence
 
-import numpy as np
 import requests
 
 from modules.extractor import (
     compact_text,
     get_nlp,
-    get_sentence_model,
     normalize_entity_text,
     valid_entity_phrase,
 )
@@ -86,13 +84,6 @@ REQUIRE_ABSTRACT = True
 # Over-fetch, then filter + sort client-side. Semantic Scholar's search
 # endpoint has no sort option, so recency/review ordering is applied here.
 FETCH_MULTIPLIER = 3
-
-# Semantic relevance gate. Both APIs match on any lexical overlap, so a
-# query like "how to start a start up" pulls medical papers that merely
-# contain the word "start". Each paper's title+abstract is scored against
-# the keyword and dropped below this cosine similarity. Raise it to be
-# stricter (fewer, more on-topic papers); lower it to keep more.
-RESEARCH_MIN_SIMILARITY = 0.35
 
 # -----------------------------
 # Research processing settings
@@ -165,12 +156,10 @@ class ResearchCollector:
         papers: List[Paper] = []
         for source in sources:
             try:
-                candidates = source(keyword, limit)
+                papers = source(keyword, limit)
             except Exception:
-                candidates = []
-            candidates = _filter_by_relevance(keyword, candidates)
-            if candidates:
-                papers = candidates
+                papers = []
+            if papers:
                 break
 
         papers = _sort_recent_reviews_first(papers)
@@ -336,34 +325,6 @@ class ResearchCollector:
 # ---------------------------------------------------------------------------
 # Research Intelligence pipeline
 # ---------------------------------------------------------------------------
-
-
-def _filter_by_relevance(keyword: str, papers: List[Paper]) -> List[Paper]:
-    """
-    Drop papers whose title+abstract is semantically far from the keyword.
-    Both source APIs match on lexical overlap only, so this removes results
-    that merely share a common word (e.g. "start") with the query.
-    """
-    if not papers:
-        return papers
-    texts = [_paper_text(paper)[:1500] for paper in papers]
-    model = get_sentence_model()
-    try:
-        keyword_vector = model.encode(
-            [keyword], normalize_embeddings=True, show_progress_bar=False
-        )
-        document_vectors = model.encode(
-            texts, normalize_embeddings=True, show_progress_bar=False
-        )
-    except TypeError:
-        keyword_vector = model.encode([keyword], normalize_embeddings=True)
-        document_vectors = model.encode(texts, normalize_embeddings=True)
-    similarities = np.asarray(document_vectors) @ np.asarray(keyword_vector)[0]
-    return [
-        paper
-        for paper, similarity in zip(papers, similarities)
-        if similarity >= RESEARCH_MIN_SIMILARITY
-    ]
 
 
 def _abstract_from_inverted(inverted_index: Optional[Dict[str, List[int]]]) -> str:
