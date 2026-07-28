@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-BRIEF_MODEL = "gpt-4o"
+BRIEF_MODEL = "gpt-4o-mini"
 MAX_TOOL_ITERATIONS = 16
 COMPETITOR_CHARS = 12000
 REDDIT_SELFTEXT_CHARS = 1500
@@ -47,6 +47,27 @@ SYSTEM_PROMPT = (
     "threads, and open key papers. Enumerate every sub-topic any strong "
     "competitor covers; your structure is a SUPERSET of all of them, plus "
     "the gaps surfaced by Reddit and research. Miss nothing.\n\n"
+    "SYNTHESIS MANDATE (READ FIRST): ground the brief in every available "
+    "source, then IMPROVE on it. Strike a balance and avoid both failure "
+    "modes - do NOT merely mirror the competitors, and do NOT ignore the "
+    "data and write from your own knowledge alone.\n"
+    "- CONSIDER ALL SOURCES before writing: competitor section outlines "
+    "(get_competitor_structure), Topic Intelligence, entities, Reddit, "
+    "research, and search (PAA / autosuggest / related). Reviewing them is "
+    "mandatory; how you use them is your judgement.\n"
+    "- Treat competitor coverage as a MINIMUM completeness bar - cover the "
+    "table-stakes topics they all cover so nothing essential is missed - "
+    "but NOT as a template or a ceiling. You own the final structure.\n"
+    "- Then exercise editorial judgement: reorganise, merge, reorder and "
+    "rename sections into a more logical, comprehensive flow than any "
+    "single competitor, and ADD sections/FAQs that Reddit, research, "
+    "search, or your own expertise justify. Mark additions '(added)'.\n"
+    "- The Content Recommendations list and your own ideas are welcome "
+    "additions, but they supplement the grounded structure; they do not "
+    "replace looking at the sources.\n"
+    "- If a signal is disabled (e.g. entities or topics), still ground in "
+    "the remaining sources; never collapse to competitors-only or to "
+    "your-ideas-only.\n\n"
     "PROCESS:\n"
     "1. RESEARCH FIRST. Inspect competitor outlines and pages, Reddit "
     "threads, and papers. Do not invent facts; if unsure, open the raw "
@@ -75,11 +96,28 @@ SYSTEM_PROMPT = (
     "myths and real experiences; research findings and specific citable "
     "data points; competitor coverage gaps; new angles; and an FAQ section "
     "aligned to People-Also-Ask and community questions.\n"
-    "7a. SHAPE THE OUTLINE FROM THE SIGNALS. Use competitor topics, key "
-    "concepts/entities, search questions, and community gaps to decide "
-    "WHICH sub-topics the outline must cover. These are structural input; "
-    "the writer should not need to open them, so do not cite them as "
-    "sources.\n"
+    "7a. TOPICS DEFINE STRUCTURE. Treat Topic Intelligence as the primary "
+    "blueprint. Topics determine WHAT sections exist. High-importance "
+    "topics with strong competitor coverage should normally be H2s; "
+    "medium-importance topics become H3s; low-importance topics become "
+    "FAQs or supporting bullets. Do not ignore a topic because competitors "
+    "phrase it differently - semantic similarity matters more than exact "
+    "wording.\n"
+    "7ab. FALLBACK WHEN SIGNALS ARE OFF. If Topic Intelligence is empty "
+    "(topic generation was skipped), build the structure from the "
+    "competitor outlines (get_competitor_structure) and the SERP. If "
+    "Entity Intelligence is empty (entity extraction was skipped), rely on "
+    "the topics and competitor content to decide what to cover. Never "
+    "block on a missing signal.\n"
+    "7aa. ENTITIES ENRICH CONTENT. Entity Intelligence identifies the "
+    "concepts, terminology, products, mechanisms, measurements and "
+    "technologies that belong inside the article. Entities do NOT normally "
+    "become headings. Instead: place each entity into the most relevant "
+    "section; ensure the important entities appear somewhere in the "
+    "outline; if several important entities belong to one topic, cover "
+    "them together; never create an unnecessary heading just because an "
+    "entity exists. Topics make the structure; entities make sections "
+    "comprehensive.\n"
     "7b. RESEARCH WHERE IT ADDS VALUE. Check list_papers / get_paper and "
     "the research data points. Where a finding strengthens a section, add "
     "an 'Evidence to cite' bullet that states the finding AND includes the "
@@ -106,10 +144,13 @@ SYSTEM_PROMPT = (
     "'for beginners', 'every day', 'at home', 'for weight loss'). Turn the "
     "relevant ones into H3 sub-sections or FAQ entries. Do not collect them "
     "and then ignore them.\n"
-    "7f. FOLD IN CONTENT RECOMMENDATIONS. The digest lists funnel-stage "
-    "Content Recommendations (MOFU/BOFU ideas and suggested FAQs). "
-    "Incorporate each relevant one into the outline as an H2 or H3 section, "
-    "or into the FAQ list. Do not leave them out.\n"
+    "7f. FOLD IN CONTENT RECOMMENDATIONS AS ADDITIONS. The digest lists "
+    "funnel-stage Content Recommendations (MOFU/BOFU ideas and suggested "
+    "FAQs). These are ADDITIONS layered on top of the competitor+topic "
+    "base (step c of the synthesis mandate), never the base itself. Fold "
+    "each relevant one in as an H2/H3 or FAQ, marked '(added)'. They must "
+    "sit alongside the competitor/topic/Reddit/research sections, not "
+    "replace them.\n"
     "8. LINK SELECTIVELY, NOT EVERYWHERE. The outline must read as plain, "
     "writeable content that stands on its own. Attach a source link or "
     "resource nudge ONLY where it materially helps the writer: a specific "
@@ -168,9 +209,11 @@ SYSTEM_PROMPT = (
     "   - Reason: one line on why the section is included at this priority "
     "(e.g. high community interest, low competitor coverage, strong "
     "evidence).\n"
-    "   - Relevant entities/topics: the specific concepts from the provided "
-    "topics and entities lists (get_topics / get_entities) that belong in "
-    "this section, so nothing important is left out.\n"
+    "   - Section Inputs (list explicitly): 'Topics driving this section' "
+    "(from Topic Intelligence); 'Important entities to cover' (from Entity "
+    "Intelligence); 'Community signals' (relevant Reddit points); 'Research "
+    "signals' (relevant studies/data). This shows why the section exists "
+    "and what must appear in it.\n"
     "   - Coverage stars ONLY when the section maps to a real topic; for "
     "structural sections (Introduction, FAQs, Sources) omit coverage or "
     "mark n/a.\n"
@@ -513,24 +556,64 @@ def _build_digest(bundle: Dict[str, Any]) -> str:
     total = len(comp)
     lines.append(f"TOTAL COMPETITORS: {total}")
 
-    topic_bits = []
-    for t in (topics or [])[:DIGEST_TOP_N]:
-        if isinstance(t, dict) and t.get("topic"):
-            cu = t.get("competitors_using")
-            topic_bits.append(
-                f"{t['topic']} [{cu}/{total}]" if cu is not None else str(t["topic"])
+    # Topic Intelligence is core context: the structural blueprint.
+    lines.append("\nTOPIC INTELLIGENCE (the blueprint for the structure; "
+                 "get_topics for all):")
+    if topics:
+        for t in topics[:30]:
+            if not isinstance(t, dict):
+                continue
+            lines.append(
+                "- {topic} | Coverage: {used}/{total} competitors | "
+                "Importance: {importance}".format(
+                    topic=t.get("topic", ""),
+                    used=t.get("competitors_using", 0),
+                    total=total,
+                    importance=t.get("importance", ""),
+                )
             )
-    lines.append(
-        "\nTOP COMPETITOR TOPICS (coverage = competitors_using/total; "
-        "use get_topics for all): " + "; ".join(topic_bits)
-    )
+        lines.append(
+            "These topics represent semantic coverage across competitors "
+            "and should drive the document structure. High-coverage/high-"
+            "importance topics usually become H2s; medium ones become H3s "
+            "or FAQs depending on search intent."
+        )
+    else:
+        lines.append(
+            "(No topic generation this run. Derive the structure from the "
+            "competitor outlines via get_competitor_structure and the SERP "
+            "results.)"
+        )
 
-    concept_names = [
-        e.get("entity") for e in entities[:DIGEST_TOP_N]
-        if isinstance(e, dict) and e.get("type") not in ("ORG", "PRODUCT")
-        and e.get("entity")
-    ]
-    lines.append("TOP CONCEPTS: " + "; ".join(str(c) for c in concept_names))
+    # Entity Intelligence is core context: the concepts inside sections.
+    lines.append("\nENTITY INTELLIGENCE (concepts to place inside sections; "
+                 "get_entities for all):")
+    sorted_entities = sorted(
+        [e for e in (entities or []) if isinstance(e, dict)],
+        key=lambda x: x.get("importance") or 0,
+        reverse=True,
+    )
+    if sorted_entities:
+        for e in sorted_entities[:50]:
+            lines.append(
+                "- {entity} ({etype}) | Importance: {importance} | "
+                "Competitors: {used}".format(
+                    entity=e.get("entity", ""),
+                    etype=e.get("type", ""),
+                    importance=e.get("importance", ""),
+                    used=e.get("competitors_using", ""),
+                )
+            )
+        lines.append(
+            "These entities are important concepts that should be naturally "
+            "covered within the relevant sections. They do NOT create new "
+            "headings by themselves unless they represent a major topic."
+        )
+    else:
+        lines.append(
+            "(No entity extraction this run. Rely on the topics and the "
+            "competitor content to decide what concepts to cover.)"
+        )
 
     lines.append("\nSEARCH INTELLIGENCE (get_search_layer for full):")
     lines.append(
@@ -617,20 +700,28 @@ def run_content_brief(
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": (
-            "Here is a digest of every research tab. First call "
-            "get_competitor_structure on the top competitors to see their "
-            "real outlines, then get_competitor_content on the most "
-            "detailed ones, plus the most relevant Reddit threads. Then "
-            "call list_papers and open the key papers with get_paper, and "
-            "use the research information-gain concepts and data points from "
-            "the digest. Build an EXHAUSTIVE outline that is a superset of "
-            "the most detailed competitor: full H2>H3>H4 depth, process "
-            "steps in order, and table/image/checklist recommendations. "
-            "The outline should read as plain, writeable content on its "
-            "own; add source links or 'Evidence to cite' nudges only where "
-            "they materially help the writer (a stat, a real user quote, a "
-            "claim to verify, a gap). Miss no sub-topic, but do not force a "
-            "link onto every bullet. Then produce the content brief.\n\n"
+            "Here is a digest of every research tab.\n\n"
+            "BEFORE writing the outline, follow this order:\n"
+            "1. GROUND (mandatory to review): call get_competitor_structure "
+            "on the top competitors and read Topic Intelligence to see what "
+            "the strong pages cover. This sets the completeness floor - the "
+            "table-stakes topics you must not miss - not a template to copy.\n"
+            "2. ENRICH: map Entity Intelligence into sections (if present); "
+            "layer in Reddit (get_reddit_thread), Research (list_papers / "
+            "get_paper, data points), and Search (PAA, autosuggest, related "
+            "-> H3s/FAQs).\n"
+            "3. IMPROVE & ADD: design the best structure - reorganise, "
+            "merge, reorder, rename - and add your own sections/FAQs plus "
+            "the Content Recommendations to go beyond competitors. Mark "
+            "additions '(added)'.\n"
+            "4. ARRANGE into one logical, comprehensive flow with full "
+            "H2>H3>H4 depth, process steps in order, and table/image/"
+            "checklist assets. Add source links or 'Evidence to cite' "
+            "nudges only where they materially help.\n"
+            "Balance: exceed the competitors, but never miss what they "
+            "cover, and never ignore the data to write from memory alone. "
+            "If entities or topics are disabled, still ground in the "
+            "remaining sources.\n\n"
             + digest
         )},
     ]
@@ -696,5 +787,5 @@ def run_content_brief(
             "sources": _source_index(bundle),
             "iterations": iterations,
         }
-    except Exception:
-        return {}
+    except Exception as error:
+        return {"error": f"{type(error).__name__}: {error}"}

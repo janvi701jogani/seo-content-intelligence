@@ -55,10 +55,10 @@ SYSTEM_PROMPT = (
     "the insights. Weight the structure to that stage: a MOFU/BOFU topic "
     "must NOT be padded with top-of-funnel basics; a TOFU topic stays "
     "educational. State the chosen focus at the top in 1-2 lines.\n"
-    "3. FULL HEADING DEPTH. Use H2 > H3 > H4 wherever the topic warrants. "
-    "Do NOT stop at H2. Break every major section into its real "
-    "sub-sections. If a topic is a process, present the steps in the "
-    "correct logical/chronological order and number them.\n"
+    "3. FULL HEADING DEPTH (MANDATORY). Every substantive H2 MUST be broken "
+    "into H3 sub-sections, and H4 where warranted. An outline that stops at "
+    "H2 is unacceptable - revise it before returning. If a topic is a "
+    "process, present the steps as ordered, numbered sub-sections.\n"
     "4. RECOMMEND ASSETS per section where useful: comparison TABLES (name "
     "the columns), IMAGES / DIAGRAMS / screenshots (say what each should "
     "show), CHECKLISTS, worked EXAMPLES or mini case snapshots, and "
@@ -106,6 +106,10 @@ SYSTEM_PROMPT = (
     "'for beginners', 'every day', 'at home', 'for weight loss'). Turn the "
     "relevant ones into H3 sub-sections or FAQ entries. Do not collect them "
     "and then ignore them.\n"
+    "7f. FOLD IN CONTENT RECOMMENDATIONS. The digest lists funnel-stage "
+    "Content Recommendations (MOFU/BOFU ideas and suggested FAQs). "
+    "Incorporate each relevant one into the outline as an H2 or H3 section, "
+    "or into the FAQ list. Do not leave them out.\n"
     "8. LINK SELECTIVELY, NOT EVERYWHERE. The outline must read as plain, "
     "writeable content that stands on its own. Attach a source link or "
     "resource nudge ONLY where it materially helps the writer: a specific "
@@ -481,6 +485,24 @@ def _build_digest(bundle: Dict[str, Any]) -> str:
     if strategy.get("stage"):
         lines.append(f"FUNNEL STAGE (heuristic): {strategy['stage']} - "
                      f"{strategy.get('stage_rationale','')}")
+
+    recs = strategy.get("recommendations", {}) or {}
+    if recs:
+        lines.append("\nCONTENT RECOMMENDATIONS (fold each relevant one into "
+                     "the outline as an H2/H3 section or an FAQ):")
+        for stage_key in ("MOFU", "BOFU"):
+            titles = [
+                i.get("title") for i in (recs.get(stage_key, []) or [])
+                if isinstance(i, dict) and i.get("title")
+            ]
+            if titles:
+                lines.append(f"  {stage_key}: " + "; ".join(titles))
+        faq_qs = [
+            f.get("question") for f in (recs.get("FAQs", []) or [])
+            if isinstance(f, dict) and f.get("question")
+        ]
+        if faq_qs:
+            lines.append("  Suggested FAQs: " + "; ".join(faq_qs))
 
     comp = _tool_list_competitors(bundle)
     lines.append("\nCOMPETITORS (use get_competitor_structure for outline, "

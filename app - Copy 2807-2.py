@@ -7,7 +7,18 @@ from modules.research.literature import (
     run_research_intelligence,
 )
 from modules.search.intelligence import run_search_intelligence
-from modules.extractor import run_intelligence_engine
+from modules.strategy.funnel import run_funnel_strategy
+from modules.brief.content_brief import run_content_brief
+from modules.extractor import (
+    process_competitors,
+    extract_entities_for_document,
+    serialize_competitor_entities,
+    merge_entities_across_competitors,
+    add_entity_co_occurrence,
+    build_entity_dashboard,
+    generate_section_topic_intelligence,
+    generate_structure_intelligence,
+)
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
@@ -41,6 +52,51 @@ def render_table(rows, empty_message):
         )
     else:
         st.info(empty_message)
+
+
+def run_engine(competitors, do_entities=True, do_topics=True):
+    """
+    Stage-aware wrapper over the extractor. Competitor processing and
+    structure always run (needed for the outline). Entity extraction and
+    topic generation run only when enabled, so unticked stages are never
+    computed. Graceful degradation:
+    - entities off  -> topics + competitors + structure still available
+    - topics off    -> entities + competitors + structure still available
+    - both off      -> competitors + structure (SERP + scraped content) only
+    """
+    processed, docs = process_competitors(competitors or [])
+
+    entities = []
+    if do_entities:
+        document_entities = []
+        all_candidates = []
+        for index, (competitor, doc) in enumerate(zip(processed, docs)):
+            candidates = extract_entities_for_document(
+                doc=doc,
+                text=competitor.get("text", ""),
+                structure=competitor.get("structure", {}),
+                competitor=competitor,
+                competitor_index=index,
+            )
+            competitor["entities"] = serialize_competitor_entities(candidates)
+            document_entities.append(candidates)
+            all_candidates.extend(candidates)
+        aggregates = merge_entities_across_competitors(all_candidates)
+        add_entity_co_occurrence(aggregates, document_entities)
+        entities = build_entity_dashboard(aggregates, len(processed))
+
+    topics = []
+    if do_topics:
+        topics = generate_section_topic_intelligence(processed, entities)
+
+    structure = generate_structure_intelligence(processed)
+
+    return {
+        "competitors": processed,
+        "entities": entities,
+        "topics": topics,
+        "structure": structure,
+    }
 
 # -----------------------------
 # Sidebar
@@ -86,6 +142,15 @@ reddit_client_secret = st.sidebar.text_input(
 reddit_user_agent = st.sidebar.text_input(
     "Reddit User Agent"
 )
+
+st.sidebar.header("Modules to run")
+
+enable_serp_insights = st.sidebar.checkbox("SERP insights (Search)", value=True)
+enable_reddit = st.sidebar.checkbox("Reddit insights", value=True)
+enable_research = st.sidebar.checkbox("Research insights", value=True)
+enable_topics = st.sidebar.checkbox("Topic generation", value=True)
+enable_entities = st.sidebar.checkbox("Entity extraction", value=True)
+enable_outline = st.sidebar.checkbox("Outline generation (Content Brief)", value=True)
 
 # -----------------------------
 # Inputs
@@ -163,13 +228,21 @@ if st.button("Run Competitor Intelligence"):
             project_name=project_name,
             country=country,
             language=language,
-            num_results=num_results
+            num_results=num_results,
+            organic_results=organic_results
         )
 
-    with st.spinner("Extracting entities..."):
+    stage_label = "Processing competitors"
+    if enable_entities:
+        stage_label = "Extracting entities"
+    elif enable_topics:
+        stage_label = "Generating topics"
+    with st.spinner(stage_label + "..."):
 
-        results = run_intelligence_engine(
-            competitors
+        results = run_engine(
+            competitors,
+            do_entities=enable_entities,
+            do_topics=enable_topics,
         )
 
         competitors = results["competitors"]
@@ -177,55 +250,94 @@ if st.button("Run Competitor Intelligence"):
         topics = results["topics"]
 
     reddit_threads = []
-
-    if reddit_client_id and reddit_client_secret and reddit_user_agent:
-        with st.spinner("Fetching Reddit discussions..."):
-            collector = RedditCollector(
-                client_id=reddit_client_id,
-                client_secret=reddit_client_secret,
-                user_agent=reddit_user_agent,
-            )
-            reddit_threads = collector.search_via_google(
-                keyword=keyword,
-                serper_key=serper_key,
-                limit=10,
-                country=country,
-                language=language,
-            )
-
     community = {}
 
-    if reddit_threads:
-        with st.spinner("Processing community intelligence..."):
-            community = run_community_intelligence(
-                reddit_threads,
-                competitor_entities=entities,
-                competitor_topics=topics,
-            )
+    if enable_reddit:
+        if reddit_client_id and reddit_client_secret and reddit_user_agent:
+            with st.spinner("Fetching Reddit discussions..."):
+                collector = RedditCollector(
+                    client_id=reddit_client_id,
+                    client_secret=reddit_client_secret,
+                    user_agent=reddit_user_agent,
+                )
+                reddit_threads = collector.search_via_google(
+                    keyword=keyword,
+                    serper_key=serper_key,
+                    limit=10,
+                    country=country,
+                    language=language,
+                )
+            if reddit_threads:
+                with st.spinner("Processing Reddit intelligence..."):
+                    community = run_community_intelligence(
+                        reddit_threads,
+                        competitor_entities=entities,
+                        competitor_topics=topics,
+                    )
 
     research = {}
+    research_papers = []
 
-    with st.spinner("Scanning research literature..."):
-        research_papers = ResearchCollector().search(
-            keyword=keyword,
-            limit=25,
-        )
-        if research_papers:
-            research = run_research_intelligence(
-                research_papers,
-                competitor_entities=entities,
-                competitor_topics=topics,
+    if enable_research:
+        with st.spinner("Scanning research literature..."):
+            research_papers = ResearchCollector().search(
+                keyword=keyword,
+                limit=25,
+            )
+            if research_papers:
+                research = run_research_intelligence(
+                    research_papers,
+                    competitor_entities=entities,
+                    competitor_topics=topics,
+                )
+
+    search_intel = {}
+
+    if enable_serp_insights:
+        with st.spinner("Analyzing search intent..."):
+            search_intel = run_search_intelligence(
+                keyword=keyword,
+                serper_key=serper_key,
+                country=country,
+                language=language,
+                competitors=competitors,
+                community=community,
             )
 
-    with st.spinner("Analyzing search intent..."):
-        search_intel = run_search_intelligence(
-            keyword=keyword,
-            serper_key=serper_key,
-            country=country,
-            language=language,
-            competitors=competitors,
-            community=community,
-        )
+    strategy = {}
+
+    if client is not None:
+        with st.spinner("Generating funnel content strategy..."):
+            strategy = run_funnel_strategy(
+                client,
+                keyword,
+                topics=topics,
+                entities=entities,
+                community=community,
+                search_intel=search_intel,
+                competitors=competitors,
+            )
+
+    brief = {}
+
+    if enable_outline and client is not None:
+        with st.spinner("Researching all tabs and drafting content brief..."):
+            brief = run_content_brief(
+                client,
+                keyword,
+                bundle={
+                    "keyword": keyword,
+                    "topics": topics,
+                    "entities": entities,
+                    "search_intel": search_intel,
+                    "community": community,
+                    "reddit_threads": reddit_threads,
+                    "research": research,
+                    "research_papers": research_papers,
+                    "competitors": competitors,
+                    "strategy": strategy,
+                },
+            )
 
     tabs = st.tabs([
         "SERP",
@@ -233,8 +345,10 @@ if st.button("Run Competitor Intelligence"):
         "Competitors",
         "Topics",
         "Entities",
-        "Community",
-        "Research"
+        "Reddit",
+        "Research",
+        "Recommendations",
+        "Content Brief"
     ])
 
     # -----------------------------
@@ -263,42 +377,45 @@ if st.button("Run Competitor Intelligence"):
 
         st.subheader("Search Intelligence")
 
-        st.write("### Signal Matrix")
-        st.caption(
-            "Questions ranked by opportunity: strong Google presence + "
-            "Reddit demand + low competitor coverage rise to the top."
-        )
-        render_table(
-            search_intel.get("signal_matrix", []),
-            "No signal matrix computed."
-        )
+        if not enable_serp_insights:
+            st.info("SERP insights disabled. Enable it in the sidebar.")
+        else:
+            st.write("### Signal Matrix")
+            st.caption(
+                "Questions ranked by opportunity: strong Google presence + "
+                "Reddit demand + low competitor coverage rise to the top."
+            )
+            render_table(
+                search_intel.get("signal_matrix", []),
+                "No signal matrix computed."
+            )
 
-        st.divider()
-        st.write("### Question Intelligence")
-        st.caption("Merged and clustered across all sources below.")
-        render_table(
-            search_intel.get("question_intelligence", []),
-            "No questions found."
-        )
+            st.divider()
+            st.write("### Question Intelligence")
+            st.caption("Merged and clustered across all sources below.")
+            render_table(
+                search_intel.get("question_intelligence", []),
+                "No questions found."
+            )
 
-        st.divider()
-        st.write("### People Also Ask")
-        render_table(search_intel.get("paa", []), "No PAA results.")
+            st.divider()
+            st.write("### People Also Ask")
+            render_table(search_intel.get("paa", []), "No PAA results.")
 
-        st.divider()
-        st.write("### Related Searches")
-        render_table(
-            search_intel.get("related_searches", []),
-            "No related searches."
-        )
+            st.divider()
+            st.write("### Related Searches")
+            render_table(
+                search_intel.get("related_searches", []),
+                "No related searches."
+            )
 
-        st.divider()
-        st.write("### Autosuggest")
-        render_table(search_intel.get("autosuggest", []), "No autosuggest results.")
+            st.divider()
+            st.write("### Autosuggest")
+            render_table(search_intel.get("autosuggest", []), "No autosuggest results.")
 
-        st.divider()
-        st.write("### Competitor FAQs")
-        render_table(search_intel.get("faqs", []), "No FAQs extracted.")
+            st.divider()
+            st.write("### Competitor FAQs")
+            render_table(search_intel.get("faqs", []), "No FAQs extracted.")
 
     # -----------------------------
     # Competitors
@@ -361,6 +478,8 @@ if st.button("Run Competitor Intelligence"):
                 use_container_width=True,
                 hide_index=True
             )
+        elif not enable_topics:
+            st.info("Topic generation disabled. Enable it in the sidebar.")
         else:
             st.info("No topics found.")
 
@@ -391,19 +510,23 @@ if st.button("Run Competitor Intelligence"):
                 use_container_width=True,
                 hide_index=True
             )
+        elif not enable_entities:
+            st.info("Entity extraction disabled. Enable it in the sidebar.")
         else:
             st.info("No entities found.")
 
     # -----------------------------
-    # Community
+    # Reddit
     # -----------------------------
 
     with tabs[5]:
 
-        st.subheader("Community Intelligence")
+        st.subheader("Reddit Intelligence")
 
-        if not reddit_threads:
-            st.info("No Reddit threads collected.")
+        if not enable_reddit:
+            st.info("Reddit insights disabled. Enable it in the sidebar.")
+        elif not reddit_threads:
+            st.info("No Reddit threads collected (check Reddit credentials).")
         else:
             # Overview
             stats = community.get("statistics", {})
@@ -494,7 +617,9 @@ if st.button("Run Competitor Intelligence"):
 
         st.subheader("Research Insights")
 
-        if not research:
+        if not enable_research:
+            st.info("Research insights disabled. Enable it in the sidebar.")
+        elif not research:
             st.info("No research literature found.")
         else:
             # Overview
@@ -538,3 +663,80 @@ if st.button("Run Competitor Intelligence"):
                 research.get("papers", []),
                 "No papers found."
             )
+
+    # -----------------------------
+    # Recommendations (funnel strategy)
+    # -----------------------------
+
+    with tabs[7]:
+
+        st.subheader("Content Recommendations")
+
+        if client is None:
+            st.info("Enter an OpenAI API key in the sidebar to generate "
+                    "funnel content recommendations.")
+        elif not strategy:
+            st.info("No recommendations generated.")
+        else:
+            stage = strategy.get("stage", "")
+            rationale = strategy.get("stage_rationale", "")
+            st.write(f"**Detected funnel stage:** {stage}")
+            if rationale:
+                st.caption(rationale)
+            st.caption(
+                "Educational, brand-neutral angles for the stages below "
+                "this keyword in the funnel."
+            )
+
+            recommendations = strategy.get("recommendations", {}) or {}
+
+            for stage_key in ("MOFU", "BOFU"):
+                items = recommendations.get(stage_key, [])
+                if items:
+                    st.divider()
+                    st.subheader(f"{stage_key} Content Ideas")
+                    render_table(items, f"No {stage_key} recommendations.")
+
+            faqs = recommendations.get("FAQs", [])
+            if faqs:
+                st.divider()
+                st.subheader("FAQs")
+                render_table(faqs, "No FAQ recommendations.")
+
+    # -----------------------------
+    # Content Brief (research agent)
+    # -----------------------------
+
+    with tabs[8]:
+
+        st.subheader("Content Brief")
+
+        if not enable_outline:
+            st.info("Outline generation disabled. Enable it in the sidebar.")
+        elif client is None:
+            st.info("Enter an OpenAI API key in the sidebar to generate a "
+                    "content brief.")
+        elif brief.get("error"):
+            st.error("Content brief failed: " + brief["error"])
+            st.caption("If this mentions the model, your OpenAI key may not "
+                       "have access to it. Change BRIEF_MODEL in "
+                       "modules/brief/content_brief.py (e.g. to gpt-4o-mini).")
+        elif not brief.get("brief"):
+            st.info("No content brief generated.")
+        else:
+            st.download_button(
+                "Download brief (Markdown)",
+                brief["brief"],
+                file_name=f"{project_name}-content-brief.md",
+                mime="text/markdown",
+            )
+            st.markdown(brief["brief"])
+
+            with st.expander("All sources"):
+                sources = brief.get("sources", {})
+                st.write("**Competitors**")
+                render_table(sources.get("competitors", []), "None.")
+                st.write("**Reddit threads**")
+                render_table(sources.get("reddit_threads", []), "None.")
+                st.write("**Papers**")
+                render_table(sources.get("papers", []), "None.")

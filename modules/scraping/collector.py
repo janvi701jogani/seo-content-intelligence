@@ -86,18 +86,38 @@ def collect_competitors(
     project_name,
     country,
     language,
-    num_results=10
+    num_results=10,
+    organic_results=None
 ):
-    organic_results, _ = get_serp(
-        keyword=keyword,
-        serper_key=serper_key,
-        country=country,
-        language=language,
-        num_results=num_results
-    )
+    # Single SERP fetch. Reuse the list the app already fetched (for the
+    # SERP tab) instead of calling Serper a second time. This keeps the
+    # SERP tab, Competitors, and Topics on the same real ranking set, and
+    # saves one Serper credit per run. Only fetch here if the caller did
+    # not pass results.
+    if organic_results:
+        results_list = organic_results
+    else:
+        results_list, _ = get_serp(
+            keyword=keyword,
+            serper_key=serper_key,
+            country=country,
+            language=language,
+            num_results=num_results
+        )
+
+    # Dedupe by URL, drop empties, preserve ranking order.
+    merged = []
+    seen = set()
+    for result in results_list or []:
+        link = result.get("link", "")
+        if not link or link in seen:
+            continue
+        seen.add(link)
+        merged.append(result)
+
     competitors = []
-    for position, result in enumerate(organic_results, start=1):
-        print(f"Scraping {position}/{len(organic_results)}")
+    for position, result in enumerate(merged, start=1):
+        print(f"Scraping {position}/{len(merged)}")
         scraped = scrape_competitor(
             result["link"],
             serper_key
