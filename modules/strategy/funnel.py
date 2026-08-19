@@ -55,21 +55,35 @@ SYSTEM_PROMPT = (
 )
 
 
+def _is_topic_word(candidate: str, keyword_tokens: set) -> bool:
+    """
+    True if every word in `candidate` is also a word in the keyword itself.
+    Guards against excluding the topic's own core word (e.g. a competitor
+    domain like 'gold.org' would otherwise add 'gold' to the brand
+    exclusion list for the keyword 'how to invest in gold', which then
+    scrubs EVERY recommendation -- they all legitimately mention gold).
+    """
+    words = candidate.split()
+    return bool(words) and all(w in keyword_tokens for w in words)
+
+
 def _competitor_brands(
     competitors: Optional[Sequence[Dict[str, Any]]],
     entities: Optional[Sequence[Dict[str, Any]]],
+    keyword: str = "",
 ) -> List[str]:
+    keyword_tokens = set(re.findall(r"[a-z0-9]+", (keyword or "").lower()))
     brands: set = set()
     for competitor in competitors or []:
         url = competitor.get("url", "") or ""
         host = urlparse(url).netloc.lower().replace("www.", "")
         root = host.split(".")[0] if host else ""
-        if len(root) >= 3:
+        if len(root) >= 3 and not _is_topic_word(root, keyword_tokens):
             brands.add(root)
     for entity in entities or []:
         if entity.get("type") in ("ORG", "PRODUCT"):
             name = str(entity.get("entity", "")).strip().lower()
-            if len(name) >= 3:
+            if len(name) >= 3 and not _is_topic_word(name, keyword_tokens):
                 brands.add(name)
     return sorted(brands)[:MAX_BRANDS]
 
@@ -207,7 +221,7 @@ def run_funnel_strategy(
     if client is None or not keyword:
         return {}
 
-    exclusion = _competitor_brands(competitors, entities)
+    exclusion = _competitor_brands(competitors, entities, keyword)
     context = _build_context(keyword, topics, entities, community, search_intel)
     user_prompt = _user_prompt(context, exclusion)
 
@@ -223,10 +237,12 @@ def run_funnel_strategy(
         )
         content = response.choices[0].message.content
         data = json.loads(content)
-    except Exception:
-        return {}
+    except Exception as error:
+        # Surface the real failure (e.g. rate limit / quota) instead of a
+        # silent {} that just looks like "no ideas generated" in the UI.
+        return {"error": f"{type(error).__name__}: {error}"}
 
     if not isinstance(data, dict) or "recommendations" not in data:
-        return {}
+        return {"error": "Model did not return the expected JSON shape."}
 
     return _scrub_recommendations(data, exclusion)

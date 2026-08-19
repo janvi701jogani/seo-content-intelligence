@@ -21,6 +21,11 @@ Raw Reddit Threads
                  |
                  v
       Community Intelligence Dashboard
+
+Every row produced by every layer below carries a "thread_links" field
+(one or more Reddit permalinks, joined with "; ") pointing back to the
+exact thread(s) it was derived from, so nothing in the dashboard is an
+unsourced claim.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 from urllib.parse import urlparse
 
 import numpy as np
@@ -56,19 +61,557 @@ SERPER_ENDPOINT = "https://google.serper.dev/search"
 # forms here to keep this module self-contained.
 
 COUNTRY_CODES = {
+    "afghanistan": "af",
+    "albania": "al",
+    "algeria": "dz",
+    "american samoa": "as",
+    "andorra": "ad",
+    "angola": "ao",
+    "anguilla": "ai",
+    "antarctica": "aq",
+    "antigua and barbuda": "ag",
+    "argentina": "ar",
+    "armenia": "am",
+    "aruba": "aw",
+    "australia": "au",
+    "austria": "at",
+    "azerbaijan": "az",
+    "bahamas (the)": "bs",
+    "bahrain": "bh",
+    "bangladesh": "bd",
+    "barbados": "bb",
+    "belarus": "by",
+    "belgium": "be",
+    "belize": "bz",
+    "benin": "bj",
+    "bermuda": "bm",
+    "bhutan": "bt",
+    "bolivia (plurinational state of)": "bo",
+    "bonaire, sint eustatius and saba": "bq",
+    "bosnia and herzegovina": "ba",
+    "botswana": "bw",
+    "bouvet island": "bv",
+    "brazil": "br",
+    "british indian ocean territory (the)": "io",
+    "brunei darussalam": "bn",
+    "bulgaria": "bg",
+    "burkina faso": "bf",
+    "burundi": "bi",
+    "cabo verde": "cv",
+    "cambodia": "kh",
+    "cameroon": "cm",
+    "canada": "ca",
+    "cayman islands (the)": "ky",
+    "central african republic (the)": "cf",
+    "chad": "td",
+    "chile": "cl",
+    "china": "cn",
+    "christmas island": "cx",
+    "cocos (keeling) islands (the)": "cc",
+    "colombia": "co",
+    "comoros (the)": "km",
+    "congo (the democratic republic of the)": "cd",
+    "congo (the)": "cg",
+    "cook islands (the)": "ck",
+    "costa rica": "cr",
+    "croatia": "hr",
+    "cuba": "cu",
+    "curaçao": "cw",
+    "cyprus": "cy",
+    "czechia": "cz",
+    "côte d'ivoire": "ci",
+    "denmark": "dk",
+    "djibouti": "dj",
+    "dominica": "dm",
+    "dominican republic (the)": "do",
+    "ecuador": "ec",
+    "egypt": "eg",
+    "el salvador": "sv",
+    "equatorial guinea": "gq",
+    "eritrea": "er",
+    "estonia": "ee",
+    "eswatini": "sz",
+    "ethiopia": "et",
+    "falkland islands (the) [malvinas]": "fk",
+    "faroe islands (the)": "fo",
+    "fiji": "fj",
+    "finland": "fi",
+    "france": "fr",
+    "french guiana": "gf",
+    "french polynesia": "pf",
+    "french southern territories (the)": "tf",
+    "gabon": "ga",
+    "gambia (the)": "gm",
+    "georgia": "ge",
+    "germany": "de",
+    "ghana": "gh",
+    "gibraltar": "gi",
+    "greece": "gr",
+    "greenland": "gl",
+    "grenada": "gd",
+    "guadeloupe": "gp",
+    "guam": "gu",
+    "guatemala": "gt",
+    "guernsey": "gg",
+    "guinea": "gn",
+    "guinea-bissau": "gw",
+    "guyana": "gy",
+    "haiti": "ht",
+    "heard island and mcdonald islands": "hm",
+    "holy see (the)": "va",
+    "honduras": "hn",
+    "hong kong": "hk",
+    "hungary": "hu",
+    "iceland": "is",
     "india": "in",
+    "indonesia": "id",
+    "iran (islamic republic of)": "ir",
+    "iraq": "iq",
+    "ireland": "ie",
+    "isle of man": "im",
+    "israel": "il",
+    "italy": "it",
+    "jamaica": "jm",
+    "japan": "jp",
+    "jersey": "je",
+    "jordan": "jo",
+    "kazakhstan": "kz",
+    "kenya": "ke",
+    "kiribati": "ki",
+    "korea (the democratic people's republic of)": "kp",
+    "korea (the republic of)": "kr",
+    "kuwait": "kw",
+    "kyrgyzstan": "kg",
+    "lao people's democratic republic (the)": "la",
+    "latvia": "lv",
+    "lebanon": "lb",
+    "lesotho": "ls",
+    "liberia": "lr",
+    "libya": "ly",
+    "liechtenstein": "li",
+    "lithuania": "lt",
+    "luxembourg": "lu",
+    "macao": "mo",
+    "madagascar": "mg",
+    "malawi": "mw",
+    "malaysia": "my",
+    "maldives": "mv",
+    "mali": "ml",
+    "malta": "mt",
+    "marshall islands (the)": "mh",
+    "martinique": "mq",
+    "mauritania": "mr",
+    "mauritius": "mu",
+    "mayotte": "yt",
+    "mexico": "mx",
+    "micronesia (federated states of)": "fm",
+    "moldova (the republic of)": "md",
+    "monaco": "mc",
+    "mongolia": "mn",
+    "montenegro": "me",
+    "montserrat": "ms",
+    "morocco": "ma",
+    "mozambique": "mz",
+    "myanmar": "mm",
+    "namibia": "na",
+    "nauru": "nr",
+    "nepal": "np",
+    "netherlands (the)": "nl",
+    "new caledonia": "nc",
+    "new zealand": "nz",
+    "nicaragua": "ni",
+    "niger (the)": "ne",
+    "nigeria": "ng",
+    "niue": "nu",
+    "norfolk island": "nf",
+    "north macedonia": "mk",
+    "northern mariana islands (the)": "mp",
+    "norway": "no",
+    "oman": "om",
+    "pakistan": "pk",
+    "palau": "pw",
+    "palestine, state of": "ps",
+    "panama": "pa",
+    "papua new guinea": "pg",
+    "paraguay": "py",
+    "peru": "pe",
+    "philippines (the)": "ph",
+    "pitcairn": "pn",
+    "poland": "pl",
+    "portugal": "pt",
+    "puerto rico": "pr",
+    "qatar": "qa",
+    "romania": "ro",
+    "russian federation (the)": "ru",
+    "rwanda": "rw",
+    "réunion": "re",
+    "saint barthélemy": "bl",
+    "saint helena, ascension and tristan da cunha": "sh",
+    "saint kitts and nevis": "kn",
+    "saint lucia": "lc",
+    "saint martin (french part)": "mf",
+    "saint pierre and miquelon": "pm",
+    "saint vincent and the grenadines": "vc",
+    "samoa": "ws",
+    "san marino": "sm",
+    "sao tome and principe": "st",
+    "saudi arabia": "sa",
+    "senegal": "sn",
+    "serbia": "rs",
+    "seychelles": "sc",
+    "sierra leone": "sl",
+    "singapore": "sg",
+    "sint maarten (dutch part)": "sx",
+    "slovakia": "sk",
+    "slovenia": "si",
+    "solomon islands": "sb",
+    "somalia": "so",
+    "south africa": "za",
+    "south georgia and the south sandwich islands": "gs",
+    "south sudan": "ss",
+    "spain": "es",
+    "sri lanka": "lk",
+    "sudan (the)": "sd",
+    "suriname": "sr",
+    "svalbard and jan mayen": "sj",
+    "sweden": "se",
+    "switzerland": "ch",
+    "syrian arab republic": "sy",
+    "taiwan (province of china)": "tw",
+    "tajikistan": "tj",
+    "tanzania, united republic of": "tz",
+    "thailand": "th",
+    "timor-leste": "tl",
+    "togo": "tg",
+    "tokelau": "tk",
+    "tonga": "to",
+    "trinidad and tobago": "tt",
+    "tunisia": "tn",
+    "turkmenistan": "tm",
+    "turks and caicos islands (the)": "tc",
+    "tuvalu": "tv",
+    "türkiye": "tr",
+    "uganda": "ug",
+    "ukraine": "ua",
+    "united arab emirates (the)": "ae",
+    "united kingdom of great britain and northern ireland (the)": "gb",
+    "united states minor outlying islands (the)": "um",
+    "united states of america (the)": "us",
+    "uruguay": "uy",
+    "uzbekistan": "uz",
+    "vanuatu": "vu",
+    "venezuela (bolivarian republic of)": "ve",
+    "viet nam": "vn",
+    "virgin islands (british)": "vg",
+    "virgin islands (u.s.)": "vi",
+    "wallis and futuna": "wf",
+    "western sahara": "eh",
+    "yemen": "ye",
+    "zambia": "zm",
+    "zimbabwe": "zw",
+    "åland islands": "ax",
+    # Friendly aliases (short/common names) alongside the official ISO names above.
     "united states": "us",
     "united kingdom": "gb",
     "uk": "gb",
-    "australia": "au",
-    "canada": "ca",
+    "south korea": "kr",
+    "north korea": "kp",
+    "russia": "ru",
+    "vietnam": "vn",
+    "laos": "la",
+    "syria": "sy",
+    "iran": "ir",
+    "bolivia": "bo",
+    "venezuela": "ve",
+    "tanzania": "tz",
+    "moldova": "md",
+    "czech republic": "cz",
+    "ivory coast": "ci",
+    "cape verde": "cv",
+    "swaziland": "sz",
+    "brunei": "bn",
+    "the bahamas": "bs",
+    "the gambia": "gm",
 }
 
 LANGUAGE_CODES = {
-    "english": "en",
-    "french": "fr",
+    "afar": "aa",
+    "abkhazian": "ab",
+    "avestan": "ae",
+    "afrikaans": "af",
+    "akan": "ak",
+    "amharic": "am",
+    "aragonese": "an",
+    "arabic": "ar",
+    "arabic (u.a.e.)": "ar",
+    "arabic (bahrain)": "ar",
+    "arabic (algeria)": "ar",
+    "arabic (egypt)": "ar",
+    "arabic (iraq)": "ar",
+    "arabic (jordan)": "ar",
+    "arabic (kuwait)": "ar",
+    "arabic (lebanon)": "ar",
+    "arabic (libya)": "ar",
+    "arabic (morocco)": "ar",
+    "arabic (oman)": "ar",
+    "arabic (qatar)": "ar",
+    "arabic (saudi arabia)": "ar",
+    "arabic (syria)": "ar",
+    "arabic (tunisia)": "ar",
+    "arabic (yemen)": "ar",
+    "assamese": "as",
+    "avaric": "av",
+    "aymara": "ay",
+    "azeri": "az",
+    "bashkir": "ba",
+    "belarusian": "be",
+    "bulgarian": "bg",
+    "bihari": "bh",
+    "bislama": "bi",
+    "bambara": "bm",
+    "bengali": "bn",
+    "tibetan": "bo",
+    "breton": "br",
+    "bosnian": "bs",
+    "catalan": "ca",
+    "chechen": "ce",
+    "chamorro": "ch",
+    "corsican": "co",
+    "cree": "cr",
+    "czech": "cs",
+    "church slavonic": "cu",
+    "chuvash": "cv",
+    "welsh": "cy",
+    "danish": "da",
     "german": "de",
+    "german (austria)": "de",
+    "german (switzerland)": "de",
+    "german (germany)": "de",
+    "german (liechtenstein)": "de",
+    "german (luxembourg)": "de",
+    "divehi": "dv",
+    "bhutani": "dz",
+    "ewe": "ee",
+    "greek": "el",
+    "english": "en",
+    "english (australia)": "en",
+    "english (belize)": "en",
+    "english (canada)": "en",
+    "english (caribbean)": "en",
+    "english (united kingdom)": "en",
+    "english (ireland)": "en",
+    "english (jamaica)": "en",
+    "english (new zealand)": "en",
+    "english (philippines)": "en",
+    "english (trinidad and tobago)": "en",
+    "english (united states)": "en",
+    "english (south africa)": "en",
+    "english (zimbabwe)": "en",
+    "esperanto": "eo",
     "spanish": "es",
+    "spanish (argentina)": "es",
+    "spanish (bolivia)": "es",
+    "spanish (chile)": "es",
+    "spanish (colombia)": "es",
+    "spanish (costa rica)": "es",
+    "spanish (dominican republic)": "es",
+    "spanish (ecuador)": "es",
+    "spanish (spain)": "es",
+    "spanish (guatemala)": "es",
+    "spanish (honduras)": "es",
+    "spanish (mexico)": "es",
+    "spanish (nicaragua)": "es",
+    "spanish (panama)": "es",
+    "spanish (peru)": "es",
+    "spanish (puerto rico)": "es",
+    "spanish (paraguay)": "es",
+    "spanish (el salvador)": "es",
+    "spanish (united states)": "es",
+    "spanish (uruguay)": "es",
+    "spanish (venezuela)": "es",
+    "estonian": "et",
+    "basque": "eu",
+    "farsi": "fa",
+    "fulah": "ff",
+    "finnish": "fi",
+    "fiji": "fj",
+    "faroese": "fo",
+    "french": "fr",
+    "french (belgium)": "fr",
+    "french (canada)": "fr",
+    "french (switzerland)": "fr",
+    "french (france)": "fr",
+    "french (luxembourg)": "fr",
+    "french (monaco)": "fr",
+    "frisian": "fy",
+    "irish": "ga",
+    "gaelic": "gd",
+    "galician": "gl",
+    "guarani": "gn",
+    "gujarati": "gu",
+    "manx": "gv",
+    "hausa": "ha",
+    "hebrew": "he",
+    "hindi": "hi",
+    "hiri motu": "ho",
+    "croatian": "hr",
+    "croatian (bosnia and herzegovina)": "hr",
+    "croatian (croatia)": "hr",
+    "haitian": "ht",
+    "hungarian": "hu",
+    "armenian": "hy",
+    "herero": "hz",
+    "interlingua": "ia",
+    "indonesian": "id",
+    "interlingue": "ie",
+    "igbo": "ig",
+    "sichuan yi": "ii",
+    "inupiak": "ik",
+    "ido": "io",
+    "icelandic": "is",
+    "italian": "it",
+    "italian (switzerland)": "it",
+    "italian (italy)": "it",
+    "inuktitut": "iu",
+    "japanese": "ja",
+    "yiddish": "yi",
+    "javanese": "jv",
+    "georgian": "ka",
+    "kongo": "kg",
+    "kikuyu": "ki",
+    "kuanyama": "kj",
+    "kazakh": "kk",
+    "greenlandic": "kl",
+    "cambodian": "km",
+    "kannada": "kn",
+    "korean": "ko",
+    "konkani": "kok",
+    "kanuri": "kr",
+    "kashmiri": "ks",
+    "kurdish": "ku",
+    "komi": "kv",
+    "cornish": "kw",
+    "kirghiz": "ky",
+    "kyrgyz": "kz",
+    "latin": "la",
+    "luxembourgish": "lb",
+    "ganda": "lg",
+    "limburgan": "li",
+    "lingala": "ln",
+    "laothian": "lo",
+    "slovenian": "sl",
+    "lithuanian": "lt",
+    "luba-katanga": "lu",
+    "latvian": "lv",
+    "malagasy": "mg",
+    "marshallese": "mh",
+    "maori": "mi",
+    "fyro macedonian": "mk",
+    "malayalam": "ml",
+    "mongolian": "mn",
+    "moldavian": "mo",
+    "marathi": "mr",
+    "malay": "ms",
+    "malay (brunei darussalam)": "ms",
+    "malay (malaysia)": "ms",
+    "maltese": "mt",
+    "burmese": "my",
+    "nauru": "na",
+    "norwegian (bokmal)": "nb",
+    "north ndebele": "nd",
+    "nepali (india)": "ne",
+    "ndonga": "ng",
+    "dutch": "nl",
+    "dutch (belgium)": "nl",
+    "dutch (netherlands)": "nl",
+    "norwegian (nynorsk)": "nn",
+    "norwegian": "no",
+    "south ndebele": "nr",
+    "northern sotho": "ns",
+    "navajo": "nv",
+    "chichewa": "ny",
+    "occitan": "oc",
+    "ojibwa": "oj",
+    "(afan)/oromoor/oriya": "om",
+    "oriya": "or",
+    "ossetian": "os",
+    "punjabi": "pa",
+    "pali": "pi",
+    "polish": "pl",
+    "pashto/pushto": "ps",
+    "portuguese": "pt",
+    "portuguese (brazil)": "pt",
+    "portuguese (portugal)": "pt",
+    "quechua": "qu",
+    "quechua (bolivia)": "qu",
+    "quechua (ecuador)": "qu",
+    "quechua (peru)": "qu",
+    "rhaeto-romanic": "rm",
+    "kirundi": "rn",
+    "romanian": "ro",
+    "russian": "ru",
+    "kinyarwanda": "rw",
+    "sanskrit": "sa",
+    "sorbian": "sb",
+    "sardinian": "sc",
+    "sindhi": "sd",
+    "sami": "se",
+    "sami (finland)": "se",
+    "sami (norway)": "se",
+    "sami (sweden)": "se",
+    "sangro": "sg",
+    "serbo-croatian": "sh",
+    "singhalese": "si",
+    "slovak": "sk",
+    "samoan": "sm",
+    "shona": "sn",
+    "somali": "so",
+    "albanian": "sq",
+    "serbian": "sr",
+    "serbian (bosnia and herzegovina)": "sr",
+    "serbian (serbia and montenegro)": "sr",
+    "siswati": "ss",
+    "sesotho": "st",
+    "sundanese": "su",
+    "swedish": "sv",
+    "swedish (finland)": "sv",
+    "swedish (sweden)": "sv",
+    "swahili": "sw",
+    "sutu": "sx",
+    "syriac": "syr",
+    "tamil": "ta",
+    "telugu": "te",
+    "tajik": "tg",
+    "thai": "th",
+    "tigrinya": "ti",
+    "turkmen": "tk",
+    "tagalog": "tl",
+    "tswana": "tn",
+    "tonga": "to",
+    "turkish": "tr",
+    "tsonga": "ts",
+    "tatar": "tt",
+    "twi": "tw",
+    "tahitian": "ty",
+    "uighur": "ug",
+    "ukrainian": "uk",
+    "urdu": "ur",
+    "uzbek": "uz",
+    "venda": "ve",
+    "vietnamese": "vi",
+    "volapuk": "vo",
+    "walloon": "wa",
+    "wolof": "wo",
+    "xhosa": "xh",
+    "yoruba": "yo",
+    "zhuang": "za",
+    "chinese": "zh",
+    "chinese (china)": "zh",
+    "chinese (hong kong sar)": "zh",
+    "chinese (macau sar)": "zh",
+    "chinese (singapore)": "zh",
+    "chinese (taiwan)": "zh",
+    "zulu": "zu",
 }
 
 
@@ -388,7 +931,9 @@ def _collect_sentences(threads: Sequence[RedditThread]) -> List[Dict[str, Any]]:
     """
     Flatten every thread (title + selftext + comments) into sentence
     records: {"thread": index, "text": sentence, "polarity": -1|0|1}.
-    Bot boilerplate and deleted content are dropped.
+    Bot boilerplate and deleted content are dropped. "thread" is the
+    index into the `threads` sequence this sentence came from, which is
+    how every downstream row traces back to a permalink.
     """
     records: List[Dict[str, Any]] = []
     for index, thread in enumerate(threads):
@@ -417,6 +962,24 @@ def _collect_sentences(threads: Sequence[RedditThread]) -> List[Dict[str, Any]]:
     return records
 
 
+def _thread_links(indices: Any, threads: Sequence[RedditThread]) -> str:
+    """
+    Resolves a set/iterable of thread indices to their Reddit permalinks,
+    deduped and in a stable order, joined into one string so it drops
+    straight into a table cell (both the Streamlit dataframe view and the
+    Excel export already know how to display a plain string column).
+    """
+    links: List[str] = []
+    seen: Set[str] = set()
+    for idx in sorted(set(indices or [])):
+        if 0 <= idx < len(threads):
+            link = threads[idx].permalink
+            if link and link not in seen:
+                seen.add(link)
+                links.append(link)
+    return "; ".join(links)
+
+
 def _cluster_records(
     records: List[Dict[str, Any]],
     distance_threshold: float,
@@ -425,6 +988,7 @@ def _cluster_records(
     Embed sentences (one batched encode call) and cluster with the same
     complete-linkage agglomerative setup the extractor uses. Returns
     clusters: {"sentences", "threads", "representative", "polarities"}.
+    "threads" is the set of thread INDICES contributing to the cluster.
     """
     if not records:
         return []
@@ -479,6 +1043,7 @@ def _pattern_layer(
     pattern: re.Pattern,
     label_key: str,
     count_key: str,
+    threads: Sequence[RedditThread],
 ) -> List[Dict[str, Any]]:
     matched = [record for record in records if pattern.search(record["text"])]
     clusters = _cluster_records(matched[:500], PATTERN_CLUSTER_DISTANCE)
@@ -490,6 +1055,7 @@ def _pattern_layer(
                 count_key: len(cluster["sentences"]),
                 "threads": len(cluster["threads"]),
                 "example": cluster["representative"],
+                "thread_links": _thread_links(cluster["threads"], threads),
             }
         )
     return rows
@@ -520,6 +1086,7 @@ def build_community_statistics(threads: Sequence[RedditThread]) -> Dict[str, Any
         "subreddit_names": sorted(subreddits),
         "average_upvotes": round(sum(scores) / len(scores)) if scores else 0,
         "time_span": time_span,
+        "thread_links": _thread_links(range(len(threads)), threads),
     }
 
 
@@ -528,7 +1095,10 @@ def build_community_statistics(threads: Sequence[RedditThread]) -> Dict[str, Any
 # -----------------------------
 
 
-def build_questions(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_questions(
+    records: List[Dict[str, Any]],
+    threads: Sequence[RedditThread],
+) -> List[Dict[str, Any]]:
     question_records = [
         record
         for record in records
@@ -542,6 +1112,7 @@ def build_questions(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "question": cluster["representative"],
                 "mentions": len(cluster["sentences"]),
                 "threads": len(cluster["threads"]),
+                "thread_links": _thread_links(cluster["threads"], threads),
             }
         )
     return rows
@@ -552,15 +1123,20 @@ def build_questions(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # -----------------------------
 
 
-def build_brands(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_brands(
+    records: List[Dict[str, Any]],
+    threads: Sequence[RedditThread],
+) -> List[Dict[str, Any]]:
     nlp = get_nlp()
     if "ner" not in nlp.pipe_names:
         return []
-    texts = [record["text"] for record in records[:2500]]
-    polarity_by_position = [record["polarity"] for record in records[:2500]]
+    subset = records[:2500]
+    texts = [record["text"] for record in subset]
+    polarity_by_position = [record["polarity"] for record in subset]
     mentions: Counter = Counter()
     positive: Counter = Counter()
     negative: Counter = Counter()
+    mention_threads: Dict[str, Set[int]] = defaultdict(set)
     for position, doc in enumerate(nlp.pipe(texts, batch_size=64)):
         for ent in doc.ents:
             if ent.label_ not in ("ORG", "PRODUCT"):
@@ -569,6 +1145,7 @@ def build_brands(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if not valid_entity_phrase(name):
                 continue
             mentions[name] += 1
+            mention_threads[name].add(subset[position]["thread"])
             if polarity_by_position[position] > 0:
                 positive[name] += 1
             elif polarity_by_position[position] < 0:
@@ -581,6 +1158,7 @@ def build_brands(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "mentions": count,
                 "positive": positive.get(name, 0),
                 "negative": negative.get(name, 0),
+                "thread_links": _thread_links(mention_threads.get(name, set()), threads),
             }
         )
     return rows
@@ -594,20 +1172,22 @@ def build_brands(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _noun_counts(
     records: List[Dict[str, Any]],
     sentence_filter,
-) -> Counter:
+) -> "tuple[Counter, Dict[str, Set[int]]]":
+    """
+    Returns (counts, thread_map): counts[lemma] is the mention count,
+    thread_map[lemma] is the set of thread indices that mentioned it.
+    """
     nlp = get_nlp()
     has_pos_model = any(
         pipe in nlp.pipe_names for pipe in ("tagger", "morphologizer")
     )
     if not has_pos_model:
-        return Counter()
-    texts = [
-        record["text"]
-        for record in records
-        if sentence_filter(record)
-    ][:1500]
+        return Counter(), {}
+    filtered = [record for record in records if sentence_filter(record)][:1500]
+    texts = [record["text"] for record in filtered]
     counts: Counter = Counter()
-    for doc in nlp.pipe(texts, batch_size=64):
+    thread_map: Dict[str, Set[int]] = defaultdict(set)
+    for record, doc in zip(filtered, nlp.pipe(texts, batch_size=64)):
         for token in doc:
             if token.pos_ != "NOUN" or token.is_stop or not token.is_alpha:
                 continue
@@ -615,29 +1195,44 @@ def _noun_counts(
             if len(lemma) <= 2:
                 continue
             counts[lemma] += 1
-    return counts
+            thread_map[lemma].add(record["thread"])
+    return counts, thread_map
 
 
-def build_features(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    counts = _noun_counts(
+def build_features(
+    records: List[Dict[str, Any]],
+    threads: Sequence[RedditThread],
+) -> List[Dict[str, Any]]:
+    counts, thread_map = _noun_counts(
         records,
         lambda record: record["polarity"] != 0
         or EVALUATIVE_PATTERN.search(record["text"]),
     )
     return [
-        {"feature": name, "mentions": count}
+        {
+            "feature": name,
+            "mentions": count,
+            "thread_links": _thread_links(thread_map.get(name, set()), threads),
+        }
         for name, count in counts.most_common(MAX_ROWS_PER_LAYER)
         if count >= 3
     ]
 
 
-def build_decision_factors(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    counts = _noun_counts(
+def build_decision_factors(
+    records: List[Dict[str, Any]],
+    threads: Sequence[RedditThread],
+) -> List[Dict[str, Any]]:
+    counts, thread_map = _noun_counts(
         records,
         lambda record: DECISION_PATTERN.search(record["text"]),
     )
     return [
-        {"decision_factor": name, "mentions": count}
+        {
+            "decision_factor": name,
+            "mentions": count,
+            "thread_links": _thread_links(thread_map.get(name, set()), threads),
+        }
         for name, count in counts.most_common(MAX_ROWS_PER_LAYER)
         if count >= 2
     ]
@@ -670,14 +1265,17 @@ def build_vocabulary(threads: Sequence[RedditThread]) -> List[Dict[str, Any]]:
         seen.add(term)
         pattern = re.compile(r"\b" + re.escape(term) + r"\b")
         mention_count = len(pattern.findall(corpus))
-        thread_count = sum(1 for text in thread_texts if pattern.search(text))
+        matching_indices = {
+            i for i, text in enumerate(thread_texts) if pattern.search(text)
+        }
         if mention_count < 3:
             continue
         rows.append(
             {
                 "term": term,
                 "mentions": mention_count,
-                "threads": thread_count,
+                "threads": len(matching_indices),
+                "thread_links": _thread_links(matching_indices, threads),
             }
         )
         if len(rows) >= MAX_ROWS_PER_LAYER:
@@ -691,7 +1289,10 @@ def build_vocabulary(threads: Sequence[RedditThread]) -> List[Dict[str, Any]]:
 # -----------------------------
 
 
-def build_experiences(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_experiences(
+    records: List[Dict[str, Any]],
+    threads: Sequence[RedditThread],
+) -> List[Dict[str, Any]]:
     matched = [
         record for record in records if EXPERIENCE_PATTERN.search(record["text"])
     ]
@@ -712,6 +1313,7 @@ def build_experiences(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "mentions": len(cluster["sentences"]),
                 "threads": len(cluster["threads"]),
                 "example": cluster["representative"],
+                "thread_links": _thread_links(cluster["threads"], threads),
             }
         )
     return rows
@@ -747,28 +1349,34 @@ def build_gaps(
     competitor_entities: Optional[List[Dict[str, Any]]],
     competitor_topics: Optional[List[Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
-    candidates: Dict[str, int] = {}
+    # term -> {"reddit_mentions": int, "links": set of permalink strings}
+    candidates: Dict[str, Dict[str, Any]] = {}
+
+    def _add(term: str, amount: int, links_str: str) -> None:
+        entry = candidates.setdefault(term, {"reddit_mentions": 0, "links": set()})
+        entry["reddit_mentions"] += amount
+        if links_str:
+            entry["links"].update(links_str.split("; "))
+
     for row in pain_points:
-        candidates[row["pain_point"]] = (
-            candidates.get(row["pain_point"], 0) + row["frequency"]
-        )
+        _add(row["pain_point"], row["frequency"], row.get("thread_links", ""))
     for row in features:
-        candidates[row["feature"]] = (
-            candidates.get(row["feature"], 0) + row["mentions"]
-        )
+        _add(row["feature"], row["mentions"], row.get("thread_links", ""))
     for row in vocabulary:
-        candidates[row["term"]] = candidates.get(row["term"], 0) + row["mentions"]
+        _add(row["term"], row["mentions"], row.get("thread_links", ""))
+
     rows = []
-    for term, reddit_mentions in candidates.items():
+    for term, data in candidates.items():
         rows.append(
             {
                 "topic": term,
-                "reddit_mentions": reddit_mentions,
+                "reddit_mentions": data["reddit_mentions"],
                 "competitor_coverage": _competitor_coverage(
                     term,
                     competitor_entities,
                     competitor_topics,
                 ),
+                "thread_links": "; ".join(sorted(data["links"])),
             }
         )
     rows.sort(
@@ -805,30 +1413,34 @@ def run_community_intelligence(
         "experiences": [...],
         "gaps": [...]
     }
+
+    Every row in every list above includes a "thread_links" field (one or
+    more Reddit permalinks joined with "; ") tracing it back to its
+    source thread(s).
     """
     threads = list(threads or [])
     if not threads:
         return {}
     records = _collect_sentences(threads)
-    pain_points = _pattern_layer(records, PAIN_PATTERN, "pain_point", "frequency")
-    features = build_features(records)
+    pain_points = _pattern_layer(records, PAIN_PATTERN, "pain_point", "frequency", threads)
+    features = build_features(records, threads)
     vocabulary = build_vocabulary(threads)
     return {
         "statistics": build_community_statistics(threads),
-        "questions": build_questions(records),
+        "questions": build_questions(records, threads),
         "pain_points": pain_points,
         "recommendations": _pattern_layer(
-            records, RECOMMENDATION_PATTERN, "advice", "mentions"
+            records, RECOMMENDATION_PATTERN, "advice", "mentions", threads
         ),
-        "brands": build_brands(records),
+        "brands": build_brands(records, threads),
         "features": features,
-        "decision_factors": build_decision_factors(records),
+        "decision_factors": build_decision_factors(records, threads),
         "vocabulary": vocabulary,
         "mistakes": _pattern_layer(
-            records, MISTAKE_PATTERN, "mistake", "frequency"
+            records, MISTAKE_PATTERN, "mistake", "frequency", threads
         ),
-        "myths": _pattern_layer(records, MYTH_PATTERN, "myth", "frequency"),
-        "experiences": build_experiences(records),
+        "myths": _pattern_layer(records, MYTH_PATTERN, "myth", "frequency", threads),
+        "experiences": build_experiences(records, threads),
         "gaps": build_gaps(
             pain_points,
             features,

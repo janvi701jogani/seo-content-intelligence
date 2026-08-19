@@ -14,6 +14,7 @@ env/
 
 # Environment Variables
 .env
+*.env
 
 # OS Files
 .DS_Store
@@ -24,14 +25,17 @@ Thumbs.db
 
 # Cache
 .cache/
+workspace/cache/
+workspace/logs/
+
+# Generated Workspace Data
+workspace/projects/
+workspace/exports/
+projects/
 
 # SQLite
 *.sqlite3
 *.db
-
-# Workspace Data
-workspace/cache/
-workspace/logs/
 
 # Render
 .render/

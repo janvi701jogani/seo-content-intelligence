@@ -25,6 +25,7 @@ The brief:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 BRIEF_MODEL = "gpt-4o-mini"
@@ -79,7 +80,31 @@ SYSTEM_PROMPT = (
     "3. FULL HEADING DEPTH (MANDATORY). Every substantive H2 MUST be broken "
     "into H3 sub-sections, and H4 where warranted. An outline that stops at "
     "H2 is unacceptable - revise it before returning. If a topic is a "
-    "process, present the steps as ordered, numbered sub-sections.\n"
+    "process, present the steps as ordered, numbered sub-sections. Write "
+    "'H1:', 'H2:', 'H3:', 'H4:' as PLAIN TEXT labels exactly like that - "
+    "do NOT wrap them in markdown '#'/'##' headers or '**bold**', and do "
+    "NOT skip straight to markdown headers instead of these labels; the "
+    "labels are how this brief is parsed and edited downstream. Follow "
+    "this exact nesting pattern for EVERY H2 (this is the required shape, "
+    "not just an example):\n"
+    "   H2: [section name]\n"
+    "   * Annotation / Reason / Section Inputs (as specified below)\n"
+    "   * H3: [first sub-topic]\n"
+    "      * Bullet: what to cover\n"
+    "      * H4: [micro-point, only if the sub-topic itself has parts - "
+    "e.g. a specific drug, a specific step, a specific demographic]\n"
+    "   * H3: [second sub-topic]\n"
+    "      * Bullet: what to cover\n"
+    "   Never submit an H2 with zero H3 children. If you cannot think of "
+    "real sub-topics for an H2, that is a sign the H2 is too narrow and "
+    "should be merged into another section as an H3 instead.\n"
+    "3a. NO REDUNDANT INTRO H2. Do not add a first H2 that only restates "
+    "the H1 in different words (e.g. H1 'X Treatment' followed immediately "
+    "by H2 'Overview of X Treatments' with no new content beyond a "
+    "definition). Either fold that framing into the opening bullets under "
+    "the FIRST substantive H2, or make the intro H2 earn its place with a "
+    "distinct job (e.g. 'Who Gets X and Why' or 'How X Differs From Y') - "
+    "never a plain restatement of the title.\n"
     "4. RECOMMEND ASSETS per section where useful: comparison TABLES (name "
     "the columns), IMAGES / DIAGRAMS / screenshots (say what each should "
     "show), CHECKLISTS, worked EXAMPLES or mini case snapshots, and "
@@ -117,7 +142,13 @@ SYSTEM_PROMPT = (
     "outline; if several important entities belong to one topic, cover "
     "them together; never create an unnecessary heading just because an "
     "entity exists. Topics make the structure; entities make sections "
-    "comprehensive.\n"
+    "comprehensive. For EACH H2/H3's 'Important entities to cover' list "
+    "(section G): include up to 10-15 entities, but ONLY ones genuinely "
+    "relevant to THAT specific section - relevance is a filter, not a "
+    "quota. If a section only has 2 relevant entities, list 2; if none of "
+    "the extracted entities fit a section, omit the line or write 'none "
+    "specific'. Never pad the list with entities that belong elsewhere "
+    "just to reach a higher count.\n"
     "7b. RESEARCH WHERE IT ADDS VALUE. Check list_papers / get_paper and "
     "the research data points. Where a finding strengthens a section, add "
     "an 'Evidence to cite' bullet that states the finding AND includes the "
@@ -211,7 +242,9 @@ SYSTEM_PROMPT = (
     "evidence).\n"
     "   - Section Inputs (list explicitly): 'Topics driving this section' "
     "(from Topic Intelligence); 'Important entities to cover' (from Entity "
-    "Intelligence); 'Community signals' (relevant Reddit points); 'Research "
+    "Intelligence - up to 10-15 entities that are actually relevant to "
+    "THIS section per rule 7aa, fewer is fine, never padded); 'Community "
+    "signals' (relevant Reddit points); 'Research "
     "signals' (relevant studies/data). This shows why the section exists "
     "and what must appear in it.\n"
     "   - Coverage stars ONLY when the section maps to a real topic; for "
@@ -219,8 +252,14 @@ SYSTEM_PROMPT = (
     "mark n/a.\n"
     "   - Then the bullets (what to cover, assets, selective links, "
     "evidence to cite, research conflict if any).\n"
-    "H. FAQs: align to PAA, the autosuggest question-modifiers, and "
-    "community 'most-asked questions'.\n"
+    "H. FAQs: merge questions from ALL of these sources, not PAA alone: "
+    "PAA, the autosuggest question-modifiers, community 'most-asked "
+    "questions', AND the 'Suggested FAQs' listed under CONTENT "
+    "RECOMMENDATIONS in the digest (from the funnel strategy tool - these "
+    "are a required input here, not optional). Deduplicate near-identical "
+    "questions across sources. Mark any FAQ that came ONLY from Content "
+    "Recommendations (not also asked via PAA/autosuggest/community) as "
+    "'(added)'.\n"
     "I. SOURCES (MANDATORY - never omit): every competitor, Reddit, and "
     "paper URL referenced anywhere above, as clickable markdown links.\n\n"
     "STAR RULES: rate 1-5 stars, be conservative. Evidence confidence 5 = "
@@ -677,6 +716,200 @@ def _source_index(bundle: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
 # ---------------------------------------------------------------------------
 
 
+# Rule 3 (section G) tells the model to write headings as literal 'H2: ...'
+# labels, not markdown '##'. Models frequently ignore this and decorate
+# them anyway (e.g. '## H2: Title', '**H2: Title**'). Every H2/H3 detector
+# below tolerates that decoration so counting, splitting, and patching all
+# agree regardless of which style the model actually used.
+_HEADING_DECORATION = r"[ \t]*(?:#{1,4}[ \t]*)?\*{0,2}[ \t]*"
+
+
+def _heading_depth_ok(markdown: str) -> bool:
+    """
+    Rule 3 (FULL HEADING DEPTH) is a prompt-level mandate, and weaker/cheaper
+    models (e.g. gpt-4o-mini) do not reliably follow it on a long system
+    prompt. Check the actual output instead of trusting compliance: count
+    H2 vs H3 markers. If most H2s have no H3 children, the outline is too
+    shallow and needs a corrective pass.
+    """
+    if not markdown:
+        return False
+    h2_count = len(re.findall(rf"(?im)^{_HEADING_DECORATION}H2\b", markdown))
+    h3_count = len(re.findall(rf"(?im)^{_HEADING_DECORATION}H3\b", markdown))
+    if h2_count == 0:
+        return True  # nothing to validate against
+    return h3_count >= h2_count  # expect at least one H3 per H2 on average
+
+
+_H2_LINE_RE = re.compile(
+    rf"(?im)^{_HEADING_DECORATION}H2\b[ \t]*:?[ \t]*\*{{0,2}}[ \t]*(.+?)[ \t]*\*{{0,2}}[ \t]*$"
+)
+_OUTLINE_TAIL_RE = re.compile(r"(?im)^[ \t#>*_-]*[HI]\.[ \t]*(FAQ|SOURCE)")
+
+
+def _normalize_title(title: str) -> str:
+    title = re.sub(r"\(.*?\)", "", title or "")
+    title = re.sub(r"[^a-z0-9 ]", "", title.lower())
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _extract_h2_title(block_text: str) -> Optional[str]:
+    match = _H2_LINE_RE.search(block_text or "")
+    return match.group(1).strip() if match else None
+
+
+def _split_outline_into_h2_blocks(brief_text: str) -> Optional[Dict[str, Any]]:
+    """
+    Splits the outline into independent H2 blocks so the review pass can
+    patch ONE section without ever touching the text of any other section.
+    Returns None if no H2 heading is found (nothing safe to patch).
+    """
+    if not brief_text:
+        return None
+    matches = list(_H2_LINE_RE.finditer(brief_text))
+    if not matches:
+        return None
+    preamble = brief_text[: matches[0].start()]
+    tail_match = _OUTLINE_TAIL_RE.search(brief_text, matches[-1].start())
+    outline_end = tail_match.start() if tail_match else len(brief_text)
+    blocks = []
+    for i, match in enumerate(matches):
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else outline_end
+        blocks.append({"title": match.group(1).strip(), "text": brief_text[start:end]})
+    tail = brief_text[outline_end:]
+    return {"preamble": preamble, "blocks": blocks, "tail": tail}
+
+
+def _rejoin_h2_blocks(split: Dict[str, Any]) -> str:
+    return split["preamble"] + "".join(b["text"] for b in split["blocks"]) + split["tail"]
+
+
+def _apply_section_edits(brief_text: str, edits: List[Dict[str, Any]]) -> str:
+    """
+    Applies a list of {"action", "target_h2", "content"} edits to specific
+    H2 blocks only. Every block not named in an edit is copied through
+    completely unchanged, so topic/entity/SERP grounding already baked
+    into a section cannot be lost by the review pass touching sections it
+    was never asked to touch.
+    """
+    if not edits:
+        return brief_text
+    split = _split_outline_into_h2_blocks(brief_text)
+    if split is None:
+        return brief_text  # nothing safe to patch against; leave as-is
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+        action = edit.get("action")
+        content = (edit.get("content") or "").strip()
+        if not content:
+            continue
+        content = content.rstrip() + "\n\n"
+        new_title = _extract_h2_title(content) or "New section"
+        target = _normalize_title(edit.get("target_h2") or "")
+        index_by_title = {
+            _normalize_title(b["title"]): i for i, b in enumerate(split["blocks"])
+        }
+        if action == "replace" and target in index_by_title:
+            idx = index_by_title[target]
+            split["blocks"][idx] = {"title": new_title, "text": content}
+        elif action == "insert_after" and target in index_by_title:
+            idx = index_by_title[target]
+            split["blocks"].insert(idx + 1, {"title": new_title, "text": content})
+        elif action == "insert_before" and target in index_by_title:
+            idx = index_by_title[target]
+            split["blocks"].insert(idx, {"title": new_title, "text": content})
+        elif action == "append":
+            split["blocks"].append({"title": new_title, "text": content})
+        # Unknown action or a target_h2 that doesn't match an existing
+        # section is skipped rather than guessed at, so a malformed edit
+        # can never corrupt or drop unrelated content.
+    return _rejoin_h2_blocks(split)
+
+
+def _extract_json_edits(text: str) -> List[Dict[str, Any]]:
+    if not text:
+        return []
+    candidate = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, re.DOTALL)
+    if fence:
+        candidate = fence.group(1)
+    else:
+        start, end = candidate.find("{"), candidate.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = candidate[start:end + 1]
+    try:
+        data = json.loads(candidate)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    edits = data.get("edits")
+    if not isinstance(edits, list):
+        return []
+    return [e for e in edits if isinstance(e, dict) and e.get("content")]
+
+
+def _build_edit_review_prompt(heading_ok: bool) -> str:
+    """
+    Self-review pass, run once after the first complete brief. Asks for a
+    list of SURGICAL edits to specific H2 sections rather than a full
+    rewrite, so sections not named in an edit are never touched -- the
+    topic/entity/SERP grounding already in an untouched section cannot be
+    lost, since _apply_section_edits only replaces the sections named
+    here and copies everything else through byte-for-byte.
+    """
+    lines = [
+        "Self-review pass. Do NOT rewrite the whole brief. You may only "
+        "change the specific H2 sections you name below - every other "
+        "section is kept exactly as you already wrote it, so already-"
+        "grounded topic/entity/SERP content in untouched sections is "
+        "never lost.",
+        "",
+        "Review the outline you just wrote (use list_papers / get_paper / "
+        "get_competitor_structure / get_topics / get_entities again if "
+        "you need to check something) and identify concrete issues:",
+        "1. MISSING SECTIONS the topics, entities, competitors, Reddit, "
+        "or search signals call for - propose them via 'insert_after', "
+        "'insert_before', or 'append'.",
+        "2. BAD ORDER OR DUPLICATION - a section that is redundant or "
+        "restates the H1 (rule 3a). Fix via 'replace', or move it via "
+        "'insert_before'/'insert_after' on a different anchor plus a "
+        "'replace' that removes it from its old spot (set that old "
+        "section's content to be folded into the new location instead).",
+        "3. MISSING H3/H4 DEPTH - an H2 with no H3 children. Propose a "
+        "'replace' for that exact H2 with the SAME section rewritten to "
+        "the required nesting depth (rule 3). When replacing, KEEP that "
+        "section's existing 'Important entities to cover' and other "
+        "Section Inputs content unless you are specifically improving "
+        "it - do not drop it.",
+        "4. MISSING STUDY LINKS - for a section where a provided paper is "
+        "directly relevant and not yet cited, propose a 'replace' that "
+        "adds an 'Evidence to cite' bullet with the real paper URL. Skip "
+        "a section entirely if nothing relevant exists - never invent a "
+        "citation.",
+    ]
+    if not heading_ok:
+        lines.append(
+            "5. KNOWN ISSUE: most H2 sections currently lack H3 children. "
+            "Include a 'replace' edit for every such H2."
+        )
+    lines.append(
+        "\nRespond with ONLY a single JSON object, no markdown fences, no "
+        "commentary, in exactly this shape:\n"
+        '{"edits": [{"action": "replace|insert_after|insert_before|'
+        'append", "target_h2": "<exact existing H2 title text, omit for '
+        'append>", "content": "<the COMPLETE standalone H2 block for the '
+        "new or replacement section: its 'H2: ...' line plus full "
+        "Annotation/Reason/Section Inputs/H3/H4/bullets>\"}]}\n"
+        'If nothing needs to change, respond with {"edits": []}. Each '
+        "'content' value must contain exactly one H2 section and nothing "
+        "from any other part of the brief."
+    )
+    return "\n".join(lines)
+
+
 def run_content_brief(
     client: Any,
     keyword: str,
@@ -728,6 +961,8 @@ def run_content_brief(
 
     try:
         iterations = 0
+        phase = "draft"
+        draft_text = ""
         for iterations in range(1, max_iterations + 1):
             response = client.chat.completions.create(
                 model=model,
@@ -740,8 +975,29 @@ def run_content_brief(
             tool_calls = getattr(message, "tool_calls", None)
 
             if not tool_calls:
+                if phase == "draft":
+                    # First complete brief. Run one mandatory self-review
+                    # pass asking for SURGICAL edits (not a rewrite) so
+                    # sections not named in an edit are guaranteed to
+                    # survive untouched -- see _apply_section_edits.
+                    draft_text = message.content or ""
+                    heading_ok = _heading_depth_ok(draft_text)
+                    messages.append({"role": "assistant", "content": draft_text})
+                    messages.append({
+                        "role": "user",
+                        "content": _build_edit_review_prompt(heading_ok),
+                    })
+                    phase = "review"
+                    continue
+
+                # phase == "review": parse the edit list and patch the
+                # ORIGINAL draft in Python. The model's response text is
+                # never used as the brief directly, so it cannot silently
+                # replace sections it wasn't asked to touch.
+                edits = _extract_json_edits(message.content or "")
+                final_brief = _apply_section_edits(draft_text, edits)
                 return {
-                    "brief": message.content or "",
+                    "brief": final_brief,
                     "sources": _source_index(bundle),
                     "iterations": iterations,
                 }
