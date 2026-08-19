@@ -11,3 +11,4 @@ pandas
 praw
 numpy
 openai
+openpyxl
