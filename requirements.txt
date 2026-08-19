@@ -10,3 +10,4 @@ lxml
 pandas
 praw
 numpy
+openai
