@@ -899,7 +899,7 @@ if run_clicked:
 
     with st.spinner("Searching Google..."):
 
-        organic_results, serp_summary = get_serp(
+        organic_results, serp_summary, serp_raw_response = get_serp(
             keyword=keyword,
             serper_key=serper_key,
             country=country,
@@ -1036,6 +1036,7 @@ if run_clicked:
     # rendering below survive any later rerun.
     st.session_state["run_results"] = {
         "organic_results": organic_results,
+        "serp_raw_response": serp_raw_response,
         "competitors": competitors,
         "topics": topics,
         "entities": entities,
@@ -1057,6 +1058,7 @@ if run_clicked:
 if "run_results" in st.session_state:
     run = st.session_state["run_results"]
     organic_results = run["organic_results"]
+    serp_raw_response = run.get("serp_raw_response", {})
     competitors = run["competitors"]
     topics = run["topics"]
     entities = run["entities"]
@@ -1105,6 +1107,18 @@ if "run_results" in st.session_state:
     with tabs[0]:
 
         st.subheader("Organic Results")
+
+        # Debug panel: shows exactly what Serper says it used for this
+        # request (q/gl/hl/type/engine, echoed back by Serper itself in
+        # searchParameters), plus the full raw response. This is what lets
+        # you confirm -- without a separate curl or Playground call --
+        # whether the country/language actually selected in the sidebar
+        # made it to Serper as the correct ISO code for this specific run.
+        with st.expander("Debug: raw Serper request/response"):
+            st.write("**searchParameters (what Serper says it used):**")
+            st.json(serp_raw_response.get("searchParameters", {}))
+            st.write("**Full raw response:**")
+            st.json(serp_raw_response)
 
         if not organic_results:
             st.info("No organic results found.")

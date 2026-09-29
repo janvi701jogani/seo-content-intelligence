@@ -8,6 +8,16 @@ def get_serp(
     language: str,
     num_results: int = 10
 ):
+    """
+    Returns (organic_results, serp_summary, raw_response).
+
+    raw_response is the full, unmodified Serper JSON response -- kept
+    around specifically so the caller can inspect raw_response.get(
+    "searchParameters") to confirm exactly what q/gl/hl/num Serper
+    actually received and used for this call, without needing a separate
+    curl/Playground test to check. On error, raw_response is {} so the
+    3-tuple contract is always honored.
+    """
     url = "https://google.serper.dev/search"
 
     payload = {
@@ -68,12 +78,14 @@ URL: {link}
 
         return (
             organic_results,
-            serp_summary
+            serp_summary,
+            data,
         )
 
     except Exception as e:
 
         return (
             [],
-            f"SERP Error: {str(e)}"
+            f"SERP Error: {str(e)}",
+            {},
         )
