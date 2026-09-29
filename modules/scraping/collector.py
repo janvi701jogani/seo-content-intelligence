@@ -97,7 +97,7 @@ def collect_competitors(
     if organic_results:
         results_list = organic_results
     else:
-        results_list, _ = get_serp(
+        results_list, _, _ = get_serp(
             keyword=keyword,
             serper_key=serper_key,
             country=country,
