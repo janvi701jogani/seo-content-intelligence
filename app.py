@@ -1108,18 +1108,6 @@ if "run_results" in st.session_state:
 
         st.subheader("Organic Results")
 
-        # Debug panel: shows exactly what Serper says it used for this
-        # request (q/gl/hl/type/engine, echoed back by Serper itself in
-        # searchParameters), plus the full raw response. This is what lets
-        # you confirm -- without a separate curl or Playground call --
-        # whether the country/language actually selected in the sidebar
-        # made it to Serper as the correct ISO code for this specific run.
-        with st.expander("Debug: raw Serper request/response"):
-            st.write("**searchParameters (what Serper says it used):**")
-            st.json(serp_raw_response.get("searchParameters", {}))
-            st.write("**Full raw response:**")
-            st.json(serp_raw_response)
-
         if not organic_results:
             st.info("No organic results found.")
         else:
